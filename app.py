@@ -15,7 +15,7 @@ import os
 DB_PATH = os.path.join(os.path.dirname(__file__), "fire.db")
 BIRTH_DATE = date(1994, 8, 26)
 DETERMINISTIC_SWR = 0.025
-POST_FIRE_CAPITAL_GAINS_TAX = 0.26
+CAPITAL_GAINS_TAX = 0.26  # Tassazione italiana su plusvalenze (esclusi titoli di stato)
 
 CATEGORY_COLORS = {
     "Azionario ETF":          "#4CAF50",
@@ -83,7 +83,9 @@ def init_db() -> None:
             inps_annual_contribution         REAL    DEFAULT 18023,
             inps_contribution_growth_rate    REAL    DEFAULT 0.025,
             inps_montante_revaluation_rate   REAL    DEFAULT 0.015,
-            inps_pension_coefficient         REAL    DEFAULT 0.065
+            inps_pension_coefficient         REAL    DEFAULT 0.065,
+            inps_irpef_rate                  REAL    DEFAULT 0.20,
+            initial_gain_pct                 REAL    DEFAULT 0.30
         );
 
         INSERT OR IGNORE INTO simulation_params (id) VALUES (1);
@@ -200,6 +202,8 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
         ("inps_contribution_growth_rate", "REAL DEFAULT 0.025"),
         ("inps_montante_revaluation_rate", "REAL DEFAULT 0.015"),
         ("inps_pension_coefficient", "REAL DEFAULT 0.065"),
+        ("inps_irpef_rate", "REAL DEFAULT 0.20"),
+        ("initial_gain_pct", "REAL DEFAULT 0.30"),
     ]
     for col_name, col_def in extra_columns:
         if col_name not in cols:
@@ -282,7 +286,9 @@ def save_params(params: dict) -> None:
                    inps_annual_contribution=:inps_annual_contribution,
                    inps_contribution_growth_rate=:inps_contribution_growth_rate,
                    inps_montante_revaluation_rate=:inps_montante_revaluation_rate,
-                   inps_pension_coefficient=:inps_pension_coefficient
+                   inps_pension_coefficient=:inps_pension_coefficient,
+                   inps_irpef_rate=:inps_irpef_rate,
+                   initial_gain_pct=:initial_gain_pct
                WHERE id=1""",
             params,
         )
@@ -411,11 +417,14 @@ def simulate(
     inps_contribution_growth_rate: float = 0.03,
     inps_montante_revaluation_rate: float = 0.015,
     inps_pension_coefficient: float = 0.065,
-) -> tuple[pd.DataFrame, float | None, bool]:
+    inps_irpef_rate: float = 0.20,
+    initial_gain_pct: float = 0.30,
+) -> tuple[pd.DataFrame, bool]:
     """
     Proietta il patrimonio in euro reali (inflazione rimossa).
-    Dopo il FIRE lo stipendio viene azzerato e restano solo le spese.
-    Restituisce (DataFrame mensile, età FIRE o None, successo_a_fine_periodo).
+    Dopo planned_retirement_age lo stipendio viene azzerato e restano solo le spese.
+    Tassazione sui prelievi: 26% solo sulla quota plusvalenza (gain_ratio dinamico).
+    Restituisce (DataFrame mensile, successo_a_fine_periodo).
     """
     real_annual = (1 + nominal_return) / (1 + inflation) - 1
     real_monthly = (1 + real_annual) ** (1 / 12) - 1
@@ -424,9 +433,6 @@ def simulate(
     fonte_real_annual = (1 + fonte_nominal) / (1 + inflation) - 1
     fonte_real_monthly = (1 + fonte_real_annual) ** (1 / 12) - 1
     salary_growth_monthly = (1 + salary_growth_rate) ** (1 / 12) - 1
-    # RAL (gross salary) grows nominally: real growth + inflation
-    ral_nominal_growth = (1 + salary_growth_rate) * (1 + inflation) - 1
-    ral_growth_monthly = (1 + ral_nominal_growth) ** (1 / 12) - 1
     rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
     owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
     real_estate_growth_monthly = (1 + real_estate_appreciation) ** (1 / 12) - 1
@@ -434,7 +440,7 @@ def simulate(
     months = int((end_age - start_age) * 12)
     ages, values, fire_nums = [], [], []
     portfolio = portfolio_start
-    fire_age = None
+    cost_basis = portfolio_start * (1 - initial_gain_pct)  # Costo di carico iniziale
 
     # Fon.te variables
     pension_pot = pension_value
@@ -457,12 +463,13 @@ def simulate(
         # Sblocco a fonte_access_age con tassazione sulle plusvalenze
         if not pension_pot_added:
             if age < planned_retirement_age:
-                pension_pot = pension_pot * (1 + fonte_real_monthly) + annual_pension_contribution * ((1 + ral_growth_monthly) ** m) / 12
+                pension_pot = pension_pot * (1 + fonte_real_monthly) + annual_pension_contribution * ((1 + salary_growth_monthly) ** m) / 12
             else:
                 pension_pot = pension_pot * (1 + fonte_real_monthly)
             if age >= fonte_access_age:
                 net_fonte = pension_pot * (1 - fonte_tax_rate)
                 portfolio += net_fonte
+                cost_basis += net_fonte  # Fon.te entra come nuovo capitale (già tassato)
                 pension_pot_added = True
 
         # INPS: accumula montante contributivo fino al pensionamento, poi solo rivalutazione
@@ -484,10 +491,12 @@ def simulate(
 
             # Cash eredità entra in entrambi gli scenari all'età di eredità.
             portfolio += inheritance_cash_amount
+            cost_basis += inheritance_cash_amount  # Cash eredità = nuovo capitale
 
             # Solo nello scenario affitto a vita la casa al 100% viene venduta e investita.
             if housing_mode == "rent_life_with_sale":
                 portfolio += full_house_value
+                cost_basis += full_house_value  # Vendita immobile = nuovo capitale investito
             inheritance_event_done = True
 
         if housing_mode == "owner_after_inheritance" and age >= inheritance_age:
@@ -499,31 +508,41 @@ def simulate(
 
         monthly_expenses_t = monthly_non_housing_expenses + housing_monthly
         annual_expenses_t = monthly_expenses_t * 12
-        fire_number_t = (annual_expenses_t * post_fire_expense_multiplier) / threshold_swr
+
+        # FIRE number semplice: spese annue post-FIRE / SWR (solo per visualizzazione)
+        annual_expenses_post = annual_expenses_t * post_fire_expense_multiplier
+        if inps_pension_started:
+            annual_inps_net = annual_inps_pension * (1 - inps_irpef_rate)
+            net_expenses_for_fire = max(annual_expenses_post - annual_inps_net, 0)
+        else:
+            net_expenses_for_fire = annual_expenses_post
+        fire_number_t = net_expenses_for_fire / threshold_swr
 
         ages.append(round(age, 4))
         values.append(round(portfolio, 2))
         fire_nums.append(round(fire_number_t, 2))
 
-        if fire_age is None and portfolio >= fire_number_t:
-            fire_age = age
-
         retired = age >= planned_retirement_age
-        months_to_retirement = int(round((planned_retirement_age - start_age) * 12))
-        months_since_retirement = max(m - max(months_to_retirement, 0), 0)
         salary_t = monthly_salary * ((1 + salary_growth_monthly) ** m)
 
         if retired:
             monthly_expenses_post_fire = monthly_expenses_t * post_fire_expense_multiplier
-            monthly_inps_income = annual_inps_pension / 12 if inps_pension_started else 0.0
+            monthly_inps_income = (annual_inps_pension * (1 - inps_irpef_rate)) / 12 if inps_pension_started else 0.0
             net_expense = max(monthly_expenses_post_fire - monthly_inps_income, 0.0)
-            if net_expense > 0:
-                gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, POST_FIRE_CAPITAL_GAINS_TAX)
+            if net_expense > 0 and portfolio > 0:
+                # Tassazione 26% solo sulla quota plusvalenza
+                gain_ratio = max(0.0, (portfolio - cost_basis) / portfolio)
+                effective_tax = CAPITAL_GAINS_TAX * gain_ratio
+                gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, effective_tax)
+                # Aggiorna cost_basis proporzionalmente al prelievo
+                cost_basis *= max(0.0, (portfolio - gross_withdrawal) / portfolio)
                 cashflow_t = -gross_withdrawal
             else:
                 cashflow_t = 0.0
         else:
             cashflow_t = salary_t - monthly_expenses_t
+            if cashflow_t > 0:
+                cost_basis += cashflow_t  # Nuovi risparmi = nuovo costo di carico
 
         portfolio = portfolio * (1 + real_monthly) + cashflow_t
         if retired and portfolio <= 0:
@@ -533,9 +552,40 @@ def simulate(
 
     return (
         pd.DataFrame({"age": ages, "portfolio": values, "fire_number": fire_nums}),
-        fire_age,
         success,
     )
+
+
+def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
+    """
+    Trova l'età FIRE minima tramite binary search.
+    Logica: qual è la prima età in cui, smettendo di lavorare, il portafoglio
+    non si esaurisce mai fino a end_age? Tiene conto di tutti gli eventi futuri
+    (eredità, Fon.te, INPS) che arrivano al loro tempo nel corso della simulazione.
+    """
+    start_age = float(simulate_kwargs["start_age"])
+    end_age = int(simulate_kwargs["end_age"])
+
+    # Se smetti subito e il portafoglio sopravvive, FIRE è adesso
+    _, success_now = simulate(**{**simulate_kwargs, "planned_retirement_age": start_age})
+    if success_now:
+        return start_age
+
+    # Se non sopravvive neanche lavorando fino alla fine, FIRE non raggiunto
+    _, success_max = simulate(**{**simulate_kwargs, "planned_retirement_age": float(end_age)})
+    if not success_max:
+        return None
+
+    # Binary search
+    lo, hi = start_age, float(end_age)
+    while hi - lo > precision:
+        mid = (lo + hi) / 2
+        _, success_mid = simulate(**{**simulate_kwargs, "planned_retirement_age": mid})
+        if success_mid:
+            hi = mid
+        else:
+            lo = mid
+    return round(hi, 1)
 
 
 def monte_carlo_success_probability(
@@ -597,11 +647,10 @@ def monte_carlo_success_probability(
         inps_contribution_growth_rate = float(kwargs.get("inps_contribution_growth_rate", 0.03))
         inps_montante_revaluation_rate = float(kwargs.get("inps_montante_revaluation_rate", 0.015))
         inps_pension_coefficient = float(kwargs.get("inps_pension_coefficient", 0.065))
+        inps_irpef_rate = float(kwargs.get("inps_irpef_rate", 0.20))
+        initial_gain_pct = float(kwargs.get("initial_gain_pct", 0.30))
 
         salary_growth_monthly = (1 + salary_growth_rate) ** (1 / 12) - 1
-        # RAL grows nominally (real growth + inflation)
-        ral_nominal_growth = (1 + salary_growth_rate) * (1 + float(kwargs["inflation"])) - 1
-        ral_growth_monthly = (1 + ral_nominal_growth) ** (1 / 12) - 1
         rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
         owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
         real_estate_growth_monthly = (1 + real_estate_appreciation) ** (1 / 12) - 1
@@ -616,6 +665,7 @@ def monte_carlo_success_probability(
         inheritance_event_done = False
         fire_age = None
         success = True
+        cost_basis = portfolio * (1 - initial_gain_pct)
 
         fonte_nominal = 0.60 * 0.075 + 0.40 * 0.035
         fonte_real_annual_mc = (1 + fonte_nominal) / (1 + float(kwargs["inflation"])) - 1
@@ -626,12 +676,13 @@ def monte_carlo_success_probability(
 
             if not pension_pot_added:
                 if age < planned_retirement_age:
-                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc) + annual_pension_contribution * ((1 + ral_growth_monthly) ** m) / 12
+                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc) + annual_pension_contribution * ((1 + salary_growth_monthly) ** m) / 12
                 else:
                     pension_pot = pension_pot * (1 + fonte_real_monthly_mc)
                 if age >= fonte_access_age:
                     net_fonte = pension_pot * (1 - fonte_tax_rate)
                     portfolio += net_fonte
+                    cost_basis += net_fonte
                     pension_pot_added = True
 
             if not inps_pension_started:
@@ -649,8 +700,10 @@ def monte_carlo_success_probability(
                 months_to_inheritance = max(months_to_inheritance, 0)
                 full_house_value = full_house_value_today * ((1 + real_estate_growth_monthly) ** months_to_inheritance)
                 portfolio += inheritance_cash_amount
+                cost_basis += inheritance_cash_amount
                 if housing_mode == "rent_life_with_sale":
                     portfolio += full_house_value
+                    cost_basis += full_house_value
                 inheritance_event_done = True
 
             if housing_mode == "owner_after_inheritance" and age >= inheritance_age:
@@ -661,27 +714,38 @@ def monte_carlo_success_probability(
                 housing_monthly = rent_monthly_now * ((1 + rent_growth_monthly) ** m)
 
             monthly_expenses_t = monthly_non_housing_expenses + housing_monthly
-            fire_number_t = (monthly_expenses_t * 12 * post_fire_expense_multiplier) / threshold_swr
+
+            # FIRE number aggiustato per NPV eventi futuri garantiti
+            annual_expenses_post = monthly_expenses_t * 12 * post_fire_expense_multiplier
+            if inps_pension_started:
+                annual_inps_net = annual_inps_pension * (1 - inps_irpef_rate)
+                net_expenses_for_fire = max(annual_expenses_post - annual_inps_net, 0)
+            else:
+                net_expenses_for_fire = annual_expenses_post
+            fire_number_t = net_expenses_for_fire / threshold_swr
 
             if fire_age is None and portfolio >= fire_number_t:
                 fire_age = age
 
             retired = age >= planned_retirement_age
-            months_to_retirement = int(round((planned_retirement_age - start_age) * 12))
-            months_since_retirement = max(m - max(months_to_retirement, 0), 0)
             salary_t = monthly_salary * ((1 + salary_growth_monthly) ** m)
 
             if retired:
                 monthly_expenses_post_fire = monthly_expenses_t * post_fire_expense_multiplier
-                monthly_inps_income = annual_inps_pension / 12 if inps_pension_started else 0.0
+                monthly_inps_income = (annual_inps_pension * (1 - inps_irpef_rate)) / 12 if inps_pension_started else 0.0
                 net_expense = max(monthly_expenses_post_fire - monthly_inps_income, 0.0)
-                if net_expense > 0:
-                    gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, POST_FIRE_CAPITAL_GAINS_TAX)
+                if net_expense > 0 and portfolio > 0:
+                    gain_ratio = max(0.0, (portfolio - cost_basis) / portfolio)
+                    effective_tax = CAPITAL_GAINS_TAX * gain_ratio
+                    gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, effective_tax)
+                    cost_basis *= max(0.0, (portfolio - gross_withdrawal) / portfolio)
                     cashflow_t = -gross_withdrawal
                 else:
                     cashflow_t = 0.0
             else:
                 cashflow_t = salary_t - monthly_expenses_t
+                if cashflow_t > 0:
+                    cost_basis += cashflow_t
 
             random_r = np.random.normal(real_monthly_mean, monthly_std)
             if np.random.random() < monthly_crash_prob:
@@ -756,11 +820,10 @@ def monte_carlo_survival_given_initial(
         inps_contribution_growth_rate = float(kwargs.get("inps_contribution_growth_rate", 0.03))
         inps_montante_revaluation_rate = float(kwargs.get("inps_montante_revaluation_rate", 0.015))
         inps_pension_coefficient = float(kwargs.get("inps_pension_coefficient", 0.065))
+        inps_irpef_rate = float(kwargs.get("inps_irpef_rate", 0.20))
+        initial_gain_pct = float(kwargs.get("initial_gain_pct", 0.30))
 
         salary_growth_monthly = (1 + salary_growth_rate) ** (1 / 12) - 1
-        # RAL grows nominally (real growth + inflation)
-        ral_nominal_growth = (1 + salary_growth_rate) * (1 + float(kwargs["inflation"])) - 1
-        ral_growth_monthly = (1 + ral_nominal_growth) ** (1 / 12) - 1
         rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
         owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
         real_estate_growth_monthly = (1 + real_estate_appreciation) ** (1 / 12) - 1
@@ -774,6 +837,7 @@ def monte_carlo_survival_given_initial(
         annual_inps_pension = 0.0
         inheritance_event_done = False
         success = True
+        cost_basis = portfolio * (1 - initial_gain_pct)
 
         fonte_nominal = 0.60 * 0.075 + 0.40 * 0.035
         fonte_real_annual_mc = (1 + fonte_nominal) / (1 + float(kwargs["inflation"])) - 1
@@ -784,12 +848,13 @@ def monte_carlo_survival_given_initial(
 
             if not pension_pot_added:
                 if age < planned_retirement_age:
-                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc) + annual_pension_contribution * ((1 + ral_growth_monthly) ** m) / 12
+                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc) + annual_pension_contribution * ((1 + salary_growth_monthly) ** m) / 12
                 else:
                     pension_pot = pension_pot * (1 + fonte_real_monthly_mc)
                 if age >= fonte_access_age:
                     net_fonte = pension_pot * (1 - fonte_tax_rate)
                     portfolio += net_fonte
+                    cost_basis += net_fonte
                     pension_pot_added = True
 
             if not inps_pension_started:
@@ -807,8 +872,10 @@ def monte_carlo_survival_given_initial(
                 months_to_inheritance = max(months_to_inheritance, 0)
                 full_house_value = full_house_value_today * ((1 + real_estate_growth_monthly) ** months_to_inheritance)
                 portfolio += inheritance_cash_amount
+                cost_basis += inheritance_cash_amount
                 if housing_mode == "rent_life_with_sale":
                     portfolio += full_house_value
+                    cost_basis += full_house_value
                 inheritance_event_done = True
 
             if housing_mode == "owner_after_inheritance" and age >= inheritance_age:
@@ -824,21 +891,24 @@ def monte_carlo_survival_given_initial(
                 random_r += crash_impact
 
             retired = age >= planned_retirement_age
-            months_to_retirement = int(round((planned_retirement_age - start_age) * 12))
-            months_since_retirement = max(m - max(months_to_retirement, 0), 0)
             salary_t = monthly_salary * ((1 + salary_growth_monthly) ** m)
 
             if retired:
                 monthly_expenses_post_fire = monthly_expenses_t * post_fire_expense_multiplier
-                monthly_inps_income = annual_inps_pension / 12 if inps_pension_started else 0.0
+                monthly_inps_income = (annual_inps_pension * (1 - inps_irpef_rate)) / 12 if inps_pension_started else 0.0
                 net_expense = max(monthly_expenses_post_fire - monthly_inps_income, 0.0)
-                if net_expense > 0:
-                    gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, POST_FIRE_CAPITAL_GAINS_TAX)
+                if net_expense > 0 and portfolio > 0:
+                    gain_ratio = max(0.0, (portfolio - cost_basis) / portfolio)
+                    effective_tax = CAPITAL_GAINS_TAX * gain_ratio
+                    gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, effective_tax)
+                    cost_basis *= max(0.0, (portfolio - gross_withdrawal) / portfolio)
                     cashflow_t = -gross_withdrawal
                 else:
                     cashflow_t = 0.0
             else:
                 cashflow_t = salary_t - monthly_expenses_t
+                if cashflow_t > 0:
+                    cost_basis += cashflow_t
 
             portfolio = portfolio * (1 + random_r) + cashflow_t
             if retired and portfolio <= 0:
@@ -1026,7 +1096,7 @@ with st.sidebar:
         0.5,
     ) / 100
     st.caption(
-        f"Fon.te: €{annual_pension_contribution:,.0f}/anno (fisso). Rendimento 5.9% nominale "
+        f"Fon.te: €{annual_pension_contribution:,.0f}/anno (cresce con lo stipendio reale). Rendimento 5.9% nominale "
         f"(60% Az.ETF×7.5% + 40% Obbl.×3.5%). "
         f"Sblocco a {fonte_access_age} anni con {fonte_tax_rate * 100:.1f}% su intero valore."
     )
@@ -1063,8 +1133,32 @@ with st.sidebar:
     _inps_proj_montante = inps_montante_current * ((1 + inps_montante_revaluation_rate) ** (73 - age_now))
     _inps_proj_pension = _inps_proj_montante * inps_pension_coefficient
     st.caption(
-        f"INPS: montante attuale €{inps_montante_current:,.0f}, pensione stimata a 73 anni: "
-        f"€{_inps_proj_pension:,.0f}/anno netti (stima semplificata, senza contributi futuri)."
+        f"INPS: montante attuale €{inps_montante_current:,.0f}, pensione lorda stimata a 73 anni: "
+        f"€{_inps_proj_pension:,.0f}/anno (stima semplificata, senza contributi futuri)."
+    )
+    inps_irpef_rate = st.slider(
+        "Aliquota IRPEF effettiva su pensione INPS (%)",
+        10.0, 40.0,
+        float(p.get("inps_irpef_rate", 0.20) * 100),
+        1.0,
+    ) / 100
+    st.caption(
+        f"Pensione netta stimata a 73 anni: €{_inps_proj_pension * (1 - inps_irpef_rate):,.0f}/anno "
+        f"(IRPEF effettiva {inps_irpef_rate * 100:.0f}%, include detrazioni per pensione)."
+    )
+
+    st.divider()
+    st.markdown("### 🧾 Tassazione prelievi")
+    initial_gain_pct = st.slider(
+        "Plusvalenza attuale sul portafoglio (%)",
+        0.0, 80.0,
+        float(p.get("initial_gain_pct", 0.30) * 100),
+        5.0,
+    ) / 100
+    st.caption(
+        f"Oggi il {initial_gain_pct * 100:.0f}% del portafoglio è plusvalenza. "
+        f"Tassazione fissa al 26% solo sulle plusvalenze (non sull'intero prelievo). "
+        f"Col tempo la % di gain cresce con l'interesse composto → aliquota effettiva sale."
     )
 
     st.divider()
@@ -1154,6 +1248,8 @@ with st.sidebar:
             "inps_contribution_growth_rate": inps_contribution_growth_rate,
             "inps_montante_revaluation_rate": inps_montante_revaluation_rate,
             "inps_pension_coefficient": inps_pension_coefficient,
+            "inps_irpef_rate": inps_irpef_rate,
+            "initial_gain_pct": initial_gain_pct,
         })
         st.success("Salvato!")
 
@@ -1340,6 +1436,8 @@ with tab_fire:
             "inps_contribution_growth_rate": inps_contribution_growth_rate,
             "inps_montante_revaluation_rate": inps_montante_revaluation_rate,
             "inps_pension_coefficient": inps_pension_coefficient,
+            "inps_irpef_rate": inps_irpef_rate,
+            "initial_gain_pct": initial_gain_pct,
             "planned_retirement_age": planned_retirement_age,
             "housing_mode": housing_mode,
             "inheritance_age": inheritance_age,
@@ -1349,8 +1447,8 @@ with tab_fire:
             "start_age": age_now,
             "end_age": sim_end,
         }
-        df_sim, f_age, ok_end = simulate(**sim_kwargs)
-        fire_ages[label] = f_age
+        df_sim, ok_end = simulate(**sim_kwargs)
+        fire_ages[label] = find_fire_age(**sim_kwargs)
         deterministic_success[label] = ok_end
         scenario_inputs[label] = sim_kwargs
 
@@ -1471,7 +1569,7 @@ with tab_fire:
         "Interpretazione: il Target FIRE Monte Carlo è il capitale iniziale minimo oggi per avere circa 95% "
         "di probabilità di non esaurire il capitale fino all'età target, considerando stipendio fino all'età pensionamento impostata e poi solo spese."
     )
-    st.caption("Nei prelievi post-FIRE è applicata una tassazione del 26% in modo prudenziale (gross-up del prelievo necessario).")
+    st.caption(f"Nei prelievi post-FIRE: tassazione al 26% solo sulle plusvalenze (gain ratio dinamico, parte dal {initial_gain_pct * 100:.0f}% e cresce). La pensione INPS è al netto dell'IRPEF ({inps_irpef_rate * 100:.0f}%).")
 
     st.divider()
 
