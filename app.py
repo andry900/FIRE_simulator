@@ -71,12 +71,19 @@ def init_db() -> None:
             inheritance_cash_amount REAL DEFAULT 250000,
             real_estate_appreciation REAL DEFAULT 0.015,
             post_fire_expense_multiplier REAL DEFAULT 1.5,
-            post_fire_expense_growth REAL DEFAULT 0.025,
-            planned_retirement_age REAL DEFAULT 44,
+            planned_retirement_age REAL DEFAULT 44.17,
             annual_volatility      REAL    DEFAULT 0.14,
             crash_prob_annual      REAL    DEFAULT 0.10,
             crash_impact           REAL    DEFAULT -0.20,
-            monte_carlo_runs       INTEGER DEFAULT 800
+            monte_carlo_runs       INTEGER DEFAULT 800,
+            annual_pension_contribution      REAL    DEFAULT 8211,
+            fonte_access_age                 INTEGER DEFAULT 50,
+            fonte_tax_rate                   REAL    DEFAULT 0.09,
+            inps_montante_current            REAL    DEFAULT 102456.35,
+            inps_annual_contribution         REAL    DEFAULT 18023,
+            inps_contribution_growth_rate    REAL    DEFAULT 0.025,
+            inps_montante_revaluation_rate   REAL    DEFAULT 0.015,
+            inps_pension_coefficient         REAL    DEFAULT 0.065
         );
 
         INSERT OR IGNORE INTO simulation_params (id) VALUES (1);
@@ -180,12 +187,19 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
         ("inheritance_cash_amount", "REAL DEFAULT 250000"),
         ("real_estate_appreciation", "REAL DEFAULT 0.015"),
         ("post_fire_expense_multiplier", "REAL DEFAULT 1.5"),
-        ("post_fire_expense_growth", "REAL DEFAULT 0.025"),
         ("planned_retirement_age", "REAL DEFAULT 44"),
         ("annual_volatility", "REAL DEFAULT 0.14"),
         ("crash_prob_annual", "REAL DEFAULT 0.10"),
         ("crash_impact", "REAL DEFAULT -0.20"),
         ("monte_carlo_runs", "INTEGER DEFAULT 800"),
+        ("annual_pension_contribution", "REAL DEFAULT 8211"),
+        ("fonte_access_age", "INTEGER DEFAULT 50"),
+        ("fonte_tax_rate", "REAL DEFAULT 0.09"),
+        ("inps_montante_current", "REAL DEFAULT 102456.35"),
+        ("inps_annual_contribution", "REAL DEFAULT 18023"),
+        ("inps_contribution_growth_rate", "REAL DEFAULT 0.025"),
+        ("inps_montante_revaluation_rate", "REAL DEFAULT 0.015"),
+        ("inps_pension_coefficient", "REAL DEFAULT 0.065"),
     ]
     for col_name, col_def in extra_columns:
         if col_name not in cols:
@@ -196,9 +210,12 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
         "UPDATE simulation_params SET pension_access_age = 73 WHERE id = 1 AND pension_access_age = 67"
     )
 
-    # Migrazione default pensionamento: da 45 a 44 anni.
+    # Migrazione default pensionamento: da 45 → 44 → 44.17 (44 anni e 2 mesi).
     conn.execute(
         "UPDATE simulation_params SET planned_retirement_age = 44 WHERE id = 1 AND planned_retirement_age = 45"
+    )
+    conn.execute(
+        "UPDATE simulation_params SET planned_retirement_age = 44.17 WHERE id = 1 AND planned_retirement_age = 44"
     )
 
 
@@ -253,12 +270,19 @@ def save_params(params: dict) -> None:
                    inheritance_age=:inheritance_age,
                    real_estate_appreciation=:real_estate_appreciation,
                    post_fire_expense_multiplier=:post_fire_expense_multiplier,
-                   post_fire_expense_growth=:post_fire_expense_growth,
                    planned_retirement_age=:planned_retirement_age,
                    annual_volatility=:annual_volatility,
                    crash_prob_annual=:crash_prob_annual,
                    crash_impact=:crash_impact,
-                   monte_carlo_runs=:monte_carlo_runs
+                   monte_carlo_runs=:monte_carlo_runs,
+                   annual_pension_contribution=:annual_pension_contribution,
+                   fonte_access_age=:fonte_access_age,
+                   fonte_tax_rate=:fonte_tax_rate,
+                   inps_montante_current=:inps_montante_current,
+                   inps_annual_contribution=:inps_annual_contribution,
+                   inps_contribution_growth_rate=:inps_contribution_growth_rate,
+                   inps_montante_revaluation_rate=:inps_montante_revaluation_rate,
+                   inps_pension_coefficient=:inps_pension_coefficient
                WHERE id=1""",
             params,
         )
@@ -362,7 +386,6 @@ def simulate(
     monthly_non_housing_expenses: float,
     salary_growth_rate: float,
     post_fire_expense_multiplier: float,
-    post_fire_expense_growth: float,
     rent_monthly_now: float,
     rent_real_growth: float,
     owner_monthly_cost: float,
@@ -380,6 +403,14 @@ def simulate(
     real_estate_appreciation: float,
     start_age: float,
     end_age: int,
+    annual_pension_contribution: float = 8211.0,
+    fonte_access_age: int = 50,
+    fonte_tax_rate: float = 0.09,
+    inps_montante_current: float = 102456.0,
+    inps_annual_contribution: float = 18023.0,
+    inps_contribution_growth_rate: float = 0.03,
+    inps_montante_revaluation_rate: float = 0.015,
+    inps_pension_coefficient: float = 0.065,
 ) -> tuple[pd.DataFrame, float | None, bool]:
     """
     Proietta il patrimonio in euro reali (inflazione rimossa).
@@ -388,8 +419,14 @@ def simulate(
     """
     real_annual = (1 + nominal_return) / (1 + inflation) - 1
     real_monthly = (1 + real_annual) ** (1 / 12) - 1
+    # Fon.te: rendimento fisso 60% azionario ETF (7.5%) + 40% obbligazionario (3.5%) = 5.9% nominale
+    fonte_nominal = 0.60 * 0.075 + 0.40 * 0.035
+    fonte_real_annual = (1 + fonte_nominal) / (1 + inflation) - 1
+    fonte_real_monthly = (1 + fonte_real_annual) ** (1 / 12) - 1
     salary_growth_monthly = (1 + salary_growth_rate) ** (1 / 12) - 1
-    post_fire_expense_growth_monthly = (1 + post_fire_expense_growth) ** (1 / 12) - 1
+    # RAL (gross salary) grows nominally: real growth + inflation
+    ral_nominal_growth = (1 + salary_growth_rate) * (1 + inflation) - 1
+    ral_growth_monthly = (1 + ral_nominal_growth) ** (1 / 12) - 1
     rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
     owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
     real_estate_growth_monthly = (1 + real_estate_appreciation) ** (1 / 12) - 1
@@ -398,17 +435,47 @@ def simulate(
     ages, values, fire_nums = [], [], []
     portfolio = portfolio_start
     fire_age = None
-    pension_added = False
+
+    # Fon.te variables
+    pension_pot = pension_value
+    pension_pot_added = False
+
+    # INPS variables
+    inps_montante = inps_montante_current
+    inps_pension_started = False
+    annual_inps_pension = 0.0
+    inps_contribution_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
+    inps_revaluation_monthly = (1 + inps_montante_revaluation_rate) ** (1 / 12) - 1
+
     inheritance_event_done = False
     success = True
 
     for m in range(months + 1):
         age = start_age + m / 12
 
-        # Aggiungi pensione all'età di accesso (una volta sola)
-        if not pension_added and age >= pension_access_age:
-            portfolio += pension_value
-            pension_added = True
+        # Fon.te: accumula contributi (con tracciamento versati) fino al pensionamento, poi solo crescita
+        # Sblocco a fonte_access_age con tassazione sulle plusvalenze
+        if not pension_pot_added:
+            if age < planned_retirement_age:
+                pension_pot = pension_pot * (1 + fonte_real_monthly) + annual_pension_contribution * ((1 + ral_growth_monthly) ** m) / 12
+            else:
+                pension_pot = pension_pot * (1 + fonte_real_monthly)
+            if age >= fonte_access_age:
+                net_fonte = pension_pot * (1 - fonte_tax_rate)
+                portfolio += net_fonte
+                pension_pot_added = True
+
+        # INPS: accumula montante contributivo fino al pensionamento, poi solo rivalutazione
+        # A pension_access_age inizia a erogare pensione mensile
+        if not inps_pension_started:
+            if age < planned_retirement_age:
+                monthly_inps = inps_annual_contribution * ((1 + inps_contribution_growth_monthly) ** m) / 12
+                inps_montante = inps_montante * (1 + inps_revaluation_monthly) + monthly_inps
+            else:
+                inps_montante = inps_montante * (1 + inps_revaluation_monthly)
+            if age >= pension_access_age:
+                annual_inps_pension = inps_montante * inps_pension_coefficient
+                inps_pension_started = True
 
         if not inheritance_event_done and age >= inheritance_age:
             months_to_inheritance = int(round((inheritance_age - start_age) * 12))
@@ -447,16 +514,14 @@ def simulate(
         salary_t = monthly_salary * ((1 + salary_growth_monthly) ** m)
 
         if retired:
-            monthly_expenses_post_fire = (
-                monthly_expenses_t
-                * post_fire_expense_multiplier
-                * ((1 + post_fire_expense_growth_monthly) ** months_since_retirement)
-            )
-            gross_withdrawal = gross_withdrawal_for_net_expense(
-                monthly_expenses_post_fire,
-                POST_FIRE_CAPITAL_GAINS_TAX,
-            )
-            cashflow_t = -gross_withdrawal
+            monthly_expenses_post_fire = monthly_expenses_t * post_fire_expense_multiplier
+            monthly_inps_income = annual_inps_pension / 12 if inps_pension_started else 0.0
+            net_expense = max(monthly_expenses_post_fire - monthly_inps_income, 0.0)
+            if net_expense > 0:
+                gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, POST_FIRE_CAPITAL_GAINS_TAX)
+                cashflow_t = -gross_withdrawal
+            else:
+                cashflow_t = 0.0
         else:
             cashflow_t = salary_t - monthly_expenses_t
 
@@ -511,7 +576,6 @@ def monte_carlo_success_probability(
         monthly_non_housing_expenses = float(kwargs["monthly_non_housing_expenses"])
         salary_growth_rate = float(kwargs["salary_growth_rate"])
         post_fire_expense_multiplier = float(kwargs["post_fire_expense_multiplier"])
-        post_fire_expense_growth = float(kwargs["post_fire_expense_growth"])
         rent_monthly_now = float(kwargs["rent_monthly_now"])
         rent_real_growth = float(kwargs["rent_real_growth"])
         owner_monthly_cost = float(kwargs["owner_monthly_cost"])
@@ -525,24 +589,60 @@ def monte_carlo_success_probability(
         inheritance_cash_amount = float(kwargs["inheritance_cash_amount"])
         full_house_value_today = float(kwargs["full_house_value_today"])
         real_estate_appreciation = float(kwargs["real_estate_appreciation"])
+        annual_pension_contribution = float(kwargs.get("annual_pension_contribution", 8211.0))
+        fonte_access_age = int(kwargs.get("fonte_access_age", 50))
+        fonte_tax_rate = float(kwargs.get("fonte_tax_rate", 0.09))
+        inps_montante_current = float(kwargs.get("inps_montante_current", 102456.0))
+        inps_annual_contribution = float(kwargs.get("inps_annual_contribution", 18023.0))
+        inps_contribution_growth_rate = float(kwargs.get("inps_contribution_growth_rate", 0.03))
+        inps_montante_revaluation_rate = float(kwargs.get("inps_montante_revaluation_rate", 0.015))
+        inps_pension_coefficient = float(kwargs.get("inps_pension_coefficient", 0.065))
 
         salary_growth_monthly = (1 + salary_growth_rate) ** (1 / 12) - 1
-        post_fire_expense_growth_monthly = (1 + post_fire_expense_growth) ** (1 / 12) - 1
+        # RAL grows nominally (real growth + inflation)
+        ral_nominal_growth = (1 + salary_growth_rate) * (1 + float(kwargs["inflation"])) - 1
+        ral_growth_monthly = (1 + ral_nominal_growth) ** (1 / 12) - 1
         rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
         owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
         real_estate_growth_monthly = (1 + real_estate_appreciation) ** (1 / 12) - 1
+        inps_contribution_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
+        inps_revaluation_monthly = (1 + inps_montante_revaluation_rate) ** (1 / 12) - 1
 
-        pension_added = False
+        pension_pot = pension_value
+        pension_pot_added = False
+        inps_montante = inps_montante_current
+        inps_pension_started = False
+        annual_inps_pension = 0.0
         inheritance_event_done = False
         fire_age = None
         success = True
 
+        fonte_nominal = 0.60 * 0.075 + 0.40 * 0.035
+        fonte_real_annual_mc = (1 + fonte_nominal) / (1 + float(kwargs["inflation"])) - 1
+        fonte_real_monthly_mc = (1 + fonte_real_annual_mc) ** (1 / 12) - 1
+
         for m in range(months + 1):
             age = start_age + m / 12
 
-            if not pension_added and age >= pension_access_age:
-                portfolio += pension_value
-                pension_added = True
+            if not pension_pot_added:
+                if age < planned_retirement_age:
+                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc) + annual_pension_contribution * ((1 + ral_growth_monthly) ** m) / 12
+                else:
+                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc)
+                if age >= fonte_access_age:
+                    net_fonte = pension_pot * (1 - fonte_tax_rate)
+                    portfolio += net_fonte
+                    pension_pot_added = True
+
+            if not inps_pension_started:
+                if age < planned_retirement_age:
+                    monthly_inps = inps_annual_contribution * ((1 + inps_contribution_growth_monthly) ** m) / 12
+                    inps_montante = inps_montante * (1 + inps_revaluation_monthly) + monthly_inps
+                else:
+                    inps_montante = inps_montante * (1 + inps_revaluation_monthly)
+                if age >= pension_access_age:
+                    annual_inps_pension = inps_montante * inps_pension_coefficient
+                    inps_pension_started = True
 
             if not inheritance_event_done and age >= inheritance_age:
                 months_to_inheritance = int(round((inheritance_age - start_age) * 12))
@@ -572,16 +672,14 @@ def monte_carlo_success_probability(
             salary_t = monthly_salary * ((1 + salary_growth_monthly) ** m)
 
             if retired:
-                monthly_expenses_post_fire = (
-                    monthly_expenses_t
-                    * post_fire_expense_multiplier
-                    * ((1 + post_fire_expense_growth_monthly) ** months_since_retirement)
-                )
-                gross_withdrawal = gross_withdrawal_for_net_expense(
-                    monthly_expenses_post_fire,
-                    POST_FIRE_CAPITAL_GAINS_TAX,
-                )
-                cashflow_t = -gross_withdrawal
+                monthly_expenses_post_fire = monthly_expenses_t * post_fire_expense_multiplier
+                monthly_inps_income = annual_inps_pension / 12 if inps_pension_started else 0.0
+                net_expense = max(monthly_expenses_post_fire - monthly_inps_income, 0.0)
+                if net_expense > 0:
+                    gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, POST_FIRE_CAPITAL_GAINS_TAX)
+                    cashflow_t = -gross_withdrawal
+                else:
+                    cashflow_t = 0.0
             else:
                 cashflow_t = salary_t - monthly_expenses_t
 
@@ -595,9 +693,9 @@ def monte_carlo_success_probability(
                 success = False
                 break
 
-        if fire_age is not None and fire_age <= planned_retirement_age:
-            reached_fire_count += 1
+        if fire_age is not None:
             fire_ages.append(fire_age)
+            reached_fire_count += 1
         if success:
             success_count += 1
 
@@ -638,7 +736,6 @@ def monte_carlo_survival_given_initial(
         monthly_non_housing_expenses = float(kwargs["monthly_non_housing_expenses"])
         salary_growth_rate = float(kwargs["salary_growth_rate"])
         post_fire_expense_multiplier = float(kwargs["post_fire_expense_multiplier"])
-        post_fire_expense_growth = float(kwargs["post_fire_expense_growth"])
         rent_monthly_now = float(kwargs["rent_monthly_now"])
         rent_real_growth = float(kwargs["rent_real_growth"])
         owner_monthly_cost = float(kwargs["owner_monthly_cost"])
@@ -651,23 +748,59 @@ def monte_carlo_survival_given_initial(
         inheritance_cash_amount = float(kwargs["inheritance_cash_amount"])
         full_house_value_today = float(kwargs["full_house_value_today"])
         real_estate_appreciation = float(kwargs["real_estate_appreciation"])
+        annual_pension_contribution = float(kwargs.get("annual_pension_contribution", 8211.0))
+        fonte_access_age = int(kwargs.get("fonte_access_age", 50))
+        fonte_tax_rate = float(kwargs.get("fonte_tax_rate", 0.09))
+        inps_montante_current_val = float(kwargs.get("inps_montante_current", 102456.0))
+        inps_annual_contribution = float(kwargs.get("inps_annual_contribution", 18023.0))
+        inps_contribution_growth_rate = float(kwargs.get("inps_contribution_growth_rate", 0.03))
+        inps_montante_revaluation_rate = float(kwargs.get("inps_montante_revaluation_rate", 0.015))
+        inps_pension_coefficient = float(kwargs.get("inps_pension_coefficient", 0.065))
 
         salary_growth_monthly = (1 + salary_growth_rate) ** (1 / 12) - 1
-        post_fire_expense_growth_monthly = (1 + post_fire_expense_growth) ** (1 / 12) - 1
+        # RAL grows nominally (real growth + inflation)
+        ral_nominal_growth = (1 + salary_growth_rate) * (1 + float(kwargs["inflation"])) - 1
+        ral_growth_monthly = (1 + ral_nominal_growth) ** (1 / 12) - 1
         rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
         owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
         real_estate_growth_monthly = (1 + real_estate_appreciation) ** (1 / 12) - 1
+        inps_contribution_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
+        inps_revaluation_monthly = (1 + inps_montante_revaluation_rate) ** (1 / 12) - 1
 
-        pension_added = False
+        pension_pot = pension_value
+        pension_pot_added = False
+        inps_montante = inps_montante_current_val
+        inps_pension_started = False
+        annual_inps_pension = 0.0
         inheritance_event_done = False
         success = True
+
+        fonte_nominal = 0.60 * 0.075 + 0.40 * 0.035
+        fonte_real_annual_mc = (1 + fonte_nominal) / (1 + float(kwargs["inflation"])) - 1
+        fonte_real_monthly_mc = (1 + fonte_real_annual_mc) ** (1 / 12) - 1
 
         for m in range(months + 1):
             age = start_age + m / 12
 
-            if not pension_added and age >= pension_access_age:
-                portfolio += pension_value
-                pension_added = True
+            if not pension_pot_added:
+                if age < planned_retirement_age:
+                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc) + annual_pension_contribution * ((1 + ral_growth_monthly) ** m) / 12
+                else:
+                    pension_pot = pension_pot * (1 + fonte_real_monthly_mc)
+                if age >= fonte_access_age:
+                    net_fonte = pension_pot * (1 - fonte_tax_rate)
+                    portfolio += net_fonte
+                    pension_pot_added = True
+
+            if not inps_pension_started:
+                if age < planned_retirement_age:
+                    monthly_inps = inps_annual_contribution * ((1 + inps_contribution_growth_monthly) ** m) / 12
+                    inps_montante = inps_montante * (1 + inps_revaluation_monthly) + monthly_inps
+                else:
+                    inps_montante = inps_montante * (1 + inps_revaluation_monthly)
+                if age >= pension_access_age:
+                    annual_inps_pension = inps_montante * inps_pension_coefficient
+                    inps_pension_started = True
 
             if not inheritance_event_done and age >= inheritance_age:
                 months_to_inheritance = int(round((inheritance_age - start_age) * 12))
@@ -696,16 +829,14 @@ def monte_carlo_survival_given_initial(
             salary_t = monthly_salary * ((1 + salary_growth_monthly) ** m)
 
             if retired:
-                monthly_expenses_post_fire = (
-                    monthly_expenses_t
-                    * post_fire_expense_multiplier
-                    * ((1 + post_fire_expense_growth_monthly) ** months_since_retirement)
-                )
-                gross_withdrawal = gross_withdrawal_for_net_expense(
-                    monthly_expenses_post_fire,
-                    POST_FIRE_CAPITAL_GAINS_TAX,
-                )
-                cashflow_t = -gross_withdrawal
+                monthly_expenses_post_fire = monthly_expenses_t * post_fire_expense_multiplier
+                monthly_inps_income = annual_inps_pension / 12 if inps_pension_started else 0.0
+                net_expense = max(monthly_expenses_post_fire - monthly_inps_income, 0.0)
+                if net_expense > 0:
+                    gross_withdrawal = gross_withdrawal_for_net_expense(net_expense, POST_FIRE_CAPITAL_GAINS_TAX)
+                    cashflow_t = -gross_withdrawal
+                else:
+                    cashflow_t = 0.0
             else:
                 cashflow_t = salary_t - monthly_expenses_t
 
@@ -857,15 +988,8 @@ with st.sidebar:
         float(p.get("post_fire_expense_multiplier", 1.5)),
         0.05,
     )
-    post_fire_expense_growth = st.slider(
-        "Crescita spese post-FIRE (%/anno)",
-        0.0,
-        8.0,
-        float(p.get("post_fire_expense_growth", float(p.get("inflation_rate", 0.025))) * 100),
-        0.1,
-    ) / 100
     st.caption(
-        f"Dopo il pensionamento: spese x{post_fire_expense_multiplier:.2f} e crescita annua {post_fire_expense_growth * 100:.1f}%"
+        f"Dopo il pensionamento: spese x{post_fire_expense_multiplier:.2f} (fisso in termini reali)."
     )
 
     st.divider()
@@ -883,7 +1007,64 @@ with st.sidebar:
     )
 
     pension_access_age = st.number_input(
-        "Età accesso pensione", value=int(p["pension_access_age"]), step=1, min_value=55, max_value=75
+        "Età pensione INPS", value=int(p["pension_access_age"]), step=1, min_value=60, max_value=80
+    )
+
+    st.markdown("#### Fon.te")
+    annual_pension_contribution = st.number_input(
+        "Versamento annuo Fon.te (€/anno)",
+        value=float(p.get("annual_pension_contribution", 8211.0)),
+        step=100.0, min_value=0.0, format="%.0f",
+    )
+    fonte_access_age = st.number_input(
+        "Età sblocco Fon.te", value=int(p.get("fonte_access_age", 50)), step=1, min_value=44, max_value=75
+    )
+    fonte_tax_rate = st.slider(
+        "Tassazione plusvalenze Fon.te (%)",
+        9.0, 15.0,
+        float(p.get("fonte_tax_rate", 0.09) * 100),
+        0.5,
+    ) / 100
+    st.caption(
+        f"Fon.te: €{annual_pension_contribution:,.0f}/anno (fisso). Rendimento 5.9% nominale "
+        f"(60% Az.ETF×7.5% + 40% Obbl.×3.5%). "
+        f"Sblocco a {fonte_access_age} anni con {fonte_tax_rate * 100:.1f}% su intero valore."
+    )
+
+    st.markdown("#### INPS")
+    inps_montante_current = st.number_input(
+        "Montante contributivo INPS attuale (€)",
+        value=float(p.get("inps_montante_current", 102456.0)),
+        step=1000.0, min_value=0.0, format="%.2f",
+    )
+    inps_annual_contribution = st.number_input(
+        "Contributo annuo INPS (€/anno, ≤33% RAL)",
+        value=float(p.get("inps_annual_contribution", 18023.0)),
+        step=500.0, min_value=0.0, format="%.0f",
+    )
+    inps_contribution_growth_rate = st.slider(
+        "Crescita annua contributo INPS (%/anno, reale)",
+        0.0, 8.0,
+        float(p.get("inps_contribution_growth_rate", 0.03) * 100),
+        0.1,
+    ) / 100
+    inps_montante_revaluation_rate = st.slider(
+        "Rivalutazione montante INPS post-FIRE (%/anno, reale)",
+        0.0, 4.0,
+        float(p.get("inps_montante_revaluation_rate", 0.015) * 100),
+        0.1,
+    ) / 100
+    inps_pension_coefficient = st.slider(
+        "Coefficiente trasformazione INPS a 73 anni (%)",
+        5.0, 10.0,
+        float(p.get("inps_pension_coefficient", 0.065) * 100),
+        0.1,
+    ) / 100
+    _inps_proj_montante = inps_montante_current * ((1 + inps_montante_revaluation_rate) ** (73 - age_now))
+    _inps_proj_pension = _inps_proj_montante * inps_pension_coefficient
+    st.caption(
+        f"INPS: montante attuale €{inps_montante_current:,.0f}, pensione stimata a 73 anni: "
+        f"€{_inps_proj_pension:,.0f}/anno netti (stima semplificata, senza contributi futuri)."
     )
 
     st.divider()
@@ -960,12 +1141,19 @@ with st.sidebar:
             "inheritance_age":       int(inheritance_age),
             "real_estate_appreciation": real_estate_appreciation,
             "post_fire_expense_multiplier": post_fire_expense_multiplier,
-            "post_fire_expense_growth": post_fire_expense_growth,
             "planned_retirement_age": planned_retirement_age,
             "annual_volatility":     annual_volatility,
             "crash_prob_annual":     crash_prob_annual,
             "crash_impact":          crash_impact,
             "monte_carlo_runs":      monte_carlo_runs,
+            "annual_pension_contribution": annual_pension_contribution,
+            "fonte_access_age": int(fonte_access_age),
+            "fonte_tax_rate": fonte_tax_rate,
+            "inps_montante_current": inps_montante_current,
+            "inps_annual_contribution": inps_annual_contribution,
+            "inps_contribution_growth_rate": inps_contribution_growth_rate,
+            "inps_montante_revaluation_rate": inps_montante_revaluation_rate,
+            "inps_pension_coefficient": inps_pension_coefficient,
         })
         st.success("Salvato!")
 
@@ -1087,8 +1275,9 @@ with tab_fire:
 
     st.markdown(
         f"**Portafoglio investibile attuale:** €{portfolio_liquid:,.0f} "
-        f"· **Pensione (a {pension_access_age:.0f} anni):** €{pension_total:,.0f} "
-        f"· **Immobiliare eredità:** €{inherited_real_estate:,.0f}"
+        f"· **Fon.te attuale:** €{pension_total:,.0f} (sblocco a {fonte_access_age} anni) "
+        f"· **INPS montante:** €{inps_montante_current:,.0f} (pensione a {pension_access_age} anni) "
+        f"· **Eredità:** €{inherited_real_estate:,.0f}"
     )
     st.caption(
         f"A {inheritance_age} anni entrano €{inheritance_cash_amount:,.0f} cash in entrambi gli scenari. "
@@ -1134,7 +1323,6 @@ with tab_fire:
             "monthly_non_housing_expenses": monthly_non_housing_expenses,
             "salary_growth_rate": salary_growth_rate,
             "post_fire_expense_multiplier": post_fire_expense_multiplier,
-            "post_fire_expense_growth": post_fire_expense_growth,
             "rent_monthly_now": rent_monthly_now,
             "rent_real_growth": rent_real_growth,
             "owner_monthly_cost": owner_monthly_cost,
@@ -1144,6 +1332,14 @@ with tab_fire:
             "threshold_swr": threshold_swr,
             "pension_value": pension_total,
             "pension_access_age": int(pension_access_age),
+            "annual_pension_contribution": annual_pension_contribution,
+            "fonte_access_age": int(fonte_access_age),
+            "fonte_tax_rate": fonte_tax_rate,
+            "inps_montante_current": inps_montante_current,
+            "inps_annual_contribution": inps_annual_contribution,
+            "inps_contribution_growth_rate": inps_contribution_growth_rate,
+            "inps_montante_revaluation_rate": inps_montante_revaluation_rate,
+            "inps_pension_coefficient": inps_pension_coefficient,
             "planned_retirement_age": planned_retirement_age,
             "housing_mode": housing_mode,
             "inheritance_age": inheritance_age,
@@ -1168,13 +1364,24 @@ with tab_fire:
             hovertemplate="Età %{x:.1f} → €%{y:,.0f}<extra>" + label + "</extra>",
         ))
 
-    # Linea pensione
+    # Linea Fon.te sblocco
+    fig.add_vline(
+        x=fonte_access_age,
+        line_dash="dot",
+        line_color="#FFB74D",
+        line_width=1.5,
+        annotation_text=f" Fon.te {fonte_access_age:.0f}a",
+        annotation_position="top right",
+        annotation_font=dict(color="#FFB74D", size=11),
+    )
+
+    # Linea INPS pensione
     fig.add_vline(
         x=pension_access_age,
         line_dash="dot",
         line_color="#CE93D8",
         line_width=1.5,
-        annotation_text=f" Pensione {pension_access_age:.0f}a",
+        annotation_text=f" INPS {pension_access_age:.0f}a",
         annotation_position="top right",
         annotation_font=dict(color="#CE93D8", size=11),
     )
