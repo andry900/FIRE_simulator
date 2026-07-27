@@ -134,7 +134,7 @@ def _run_one_mc(
         portfolio += delta_p
         cost_basis += delta_cb
 
-        inps = step_inps(
+        inps, inps_contrib_paid = step_inps(
             inps,
             m=m,
             age=age,
@@ -180,7 +180,8 @@ def _run_one_mc(
                     municipal_surtax=municipal_surtax,
                 ) / 12 if inps.pension_started else 0.0
             )
-            net_expense = max(monthly_post - monthly_inps, 0.0)
+            extra_inps_contrib = inps_contrib_paid if inps_contrib_paid > 0 else 0.0
+            net_expense = max(monthly_post - monthly_inps, 0.0) + extra_inps_contrib
             if net_expense > 0 and portfolio > 0:
                 gain_ratio = max(0.0, (portfolio - cost_basis) / portfolio)
                 effective_tax = capital_gains_rate * gain_ratio

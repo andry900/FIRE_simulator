@@ -143,7 +143,7 @@ def step_inps(
     fill_missing_years_after_fire: bool = False,
     coefficient_haircut: float = 0.0,
     gross_pension_factor: float = 1.0,
-) -> InpsState:
+) -> tuple[InpsState, float]:
     """Avanza lo stato INPS di un mese.
 
     - I contributi entrano mensilmente (1/12 del valore annuo cresciuto).
@@ -152,7 +152,7 @@ def step_inps(
       INPS reali (non capitalizzazione mensile).
     """
     if state.pension_started:
-        return state
+        return state, 0.0
 
     montante = state.montante
     contributed_years = state.contributed_years
@@ -162,6 +162,7 @@ def step_inps(
     if (not should_contribute) and fill_missing_years_after_fire and contributed_years < required_years:
         should_contribute = True
 
+    monthly_contrib_paid = 0.0
     if should_contribute:
         monthly_contrib = (
             inps_annual_contribution
@@ -170,6 +171,7 @@ def step_inps(
         )
         montante = montante + monthly_contrib
         contributed_years += (1 / 12)
+        monthly_contrib_paid = monthly_contrib
 
     # Rivalutazione annuale al termine di ogni anno di simulazione.
     if m > 0 and m % 12 == 0:
@@ -186,14 +188,14 @@ def step_inps(
             contributed_years=contributed_years,
             pension_started=True,
             annual_pension=annual_pension,
-        )
+        ), monthly_contrib_paid
 
     return InpsState(
         montante=montante,
         contributed_years=contributed_years,
         pension_started=False,
         annual_pension=0.0,
-    )
+    ), monthly_contrib_paid
 
 
 def project_inps_pension(
