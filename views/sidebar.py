@@ -166,16 +166,34 @@ def render() -> dict:
             float(fonte_access_age),
             age_now,
         )
+
+        # Default dinamico: usa lo split reale degli asset Fon.te correnti.
+        fonte_assets = assets_df[assets_df["broker"] == "Fon.te"]
+        fonte_total = float(fonte_assets["current_value"].sum())
+        if fonte_total > 0:
+            fonte_equity_default = float(
+                fonte_assets[fonte_assets["category"] == "Azionario ETF"]["current_value"].sum()
+            ) / fonte_total
+        else:
+            fonte_equity_default = float(p.get("fonte_equity_weight", 0.60))
+
         fonte_equity_return = float(category_return_map.get("Azionario ETF", 0.075))
         fonte_bond_return = float(category_return_map.get("Obbligazionario", 0.035))
         fonte_equity_weight = st.slider(
             "Peso azionario Fon.te (%)", 0.0, 100.0,
-            float(p.get("fonte_equity_weight", 0.60) * 100), 0.5,
+            float(max(0.0, min(1.0, fonte_equity_default)) * 100), 0.5,
         ) / 100
-        fonte_bond_weight = st.slider(
-            "Peso obbligazionario Fon.te (%)", 0.0, 100.0,
-            float(p.get("fonte_bond_weight", 0.40) * 100), 0.5,
-        ) / 100
+        # Peso obbligazionario vincolato al complemento per evitare incoerenze.
+        fonte_bond_weight = max(0.0, 1.0 - fonte_equity_weight)
+        st.caption(
+            f"Peso obbligazionario Fon.te calcolato automaticamente: {fonte_bond_weight * 100:.1f}% "
+            f"(100% - quota azionaria)."
+        )
+        if fonte_total > 0:
+            st.caption(
+                f"Default runtime basato sugli asset Fon.te correnti: "
+                f"{fonte_equity_default * 100:.1f}% azionario / {(1 - fonte_equity_default) * 100:.1f}% obbligazionario."
+            )
         fonte_nominal = fonte_nominal_annual(
             fonte_equity_return,
             fonte_bond_return,
@@ -197,6 +215,10 @@ def render() -> dict:
         st.caption(
             f"Aliquota uscita: {fonte_tax_rate * 100:.1f}% (anni di iscrizione: {int(years_from_enrollment)}). "
             f"I rendimenti Fon.te sono presi dai rendimenti categoria: Azionario ETF e Obbligazionario."
+        )
+        st.caption(
+            "Nota: il valore Fon.te negli asset rappresenta il montante attuale; "
+            "questi pesi servono solo come ipotesi di allocazione futura per rendimento e fiscalita del fondo."
         )
 
         # ── INPS ─────────────────────────────────────────────────────────────
