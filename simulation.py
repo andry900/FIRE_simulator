@@ -256,19 +256,20 @@ def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
     start_age = float(simulate_kwargs["start_age"])
     end_age = int(simulate_kwargs["end_age"])
 
-    _, success_now = simulate(**{**simulate_kwargs, "planned_retirement_age": start_age})
-    if success_now:
+    def is_display_sustainable(planned_age: float) -> bool:
+        df_path, ok = simulate(**{**simulate_kwargs, "planned_retirement_age": planned_age})
+        return ok and not (df_path["portfolio"] <= 0).any()
+
+    if is_display_sustainable(start_age):
         return start_age
 
-    _, success_max = simulate(**{**simulate_kwargs, "planned_retirement_age": float(end_age)})
-    if not success_max:
+    if not is_display_sustainable(float(end_age)):
         return None
 
     lo, hi = start_age, float(end_age)
     while hi - lo > precision:
         mid = (lo + hi) / 2
-        _, ok = simulate(**{**simulate_kwargs, "planned_retirement_age": mid})
-        if ok:
+        if is_display_sustainable(mid):
             hi = mid
         else:
             lo = mid

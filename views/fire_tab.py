@@ -142,17 +142,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     st.caption(f"Età pensionamento impostata: {cfg['planned_retirement_age']:.1f} anni.")
     st.divider()
 
-    # ── SWR slider ───────────────────────────────────────────────────────────
-    st.markdown("#### 🎯 Quando superi la soglia SWR (stima deterministica)")
-    threshold_swr = st.slider(
-        "SWR (%)", min_value=2.0, max_value=5.0,
-        value=float(DETERMINISTIC_SWR * 100), step=0.1,
-    ) / 100
-    st.caption(
-        f"La sezione deterministica usa SWR {threshold_swr * 100:.1f}%. "
-        "Il pensionamento effettivo avviene all'età impostata dallo slider pensionamento."
-    )
-    st.divider()
+    threshold_swr = DETERMINISTIC_SWR
 
     # ── Costruzione kwargs comuni ────────────────────────────────────────────
     base_sim_kwargs = dict(
@@ -434,6 +424,112 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         else:
             cols[i].metric(label, "Non sostenibile", f"entro {cfg['sim_end']} anni")
 
+    st.markdown("##### Proiezione patrimonio con FIRE minima sostenibile per scenario")
+    st.caption(
+        "Ogni curva sotto usa, per il relativo scenario, la prima età FIRE sostenibile calcolata sopra. "
+        "Serve per confrontare visivamente le traiettorie dopo il pensionamento scenario per scenario."
+    )
+
+    fig_min_fire = go.Figure()
+    fonte_unlock_lag = max(float(cfg["fonte_access_age"]) - float(cfg["planned_retirement_age"]), 0.0)
+    for label in ordered_labels:
+        ret, color, dash, housing_mode, default_visible = scenarios[label]
+        scenario_fire_age = min_sustainable_fire_ages[label]
+        if scenario_fire_age is None:
+            continue
+        scenario_fonte_age = scenario_fire_age + fonte_unlock_lag
+
+        sim_kwargs = {
+            **base_sim_kwargs,
+            "nominal_return": ret,
+            "housing_mode": housing_mode,
+            "planned_retirement_age": scenario_fire_age,
+        }
+        df_min_fire, _ = simulate(**sim_kwargs)
+
+        fig_min_fire.add_trace(go.Scatter(
+            x=df_min_fire["age"],
+            y=df_min_fire["portfolio"],
+            name=label,
+            mode="lines",
+            legendgroup=label,
+            line=dict(color=color, dash=dash, width=2.5),
+            visible=default_visible,
+            hovertemplate="Età %{x:.1f} → €%{y:,.0f}<extra>" + label + "</extra>",
+        ))
+        y_max = float(df_min_fire["portfolio"].max()) if not df_min_fire.empty else 0.0
+        fig_min_fire.add_trace(go.Scatter(
+            x=[scenario_fire_age, scenario_fire_age],
+            y=[0.0, y_max],
+            mode="lines",
+            line=dict(color=color, dash="dash", width=1.5),
+            legendgroup=label,
+            showlegend=False,
+            visible=default_visible,
+            hovertemplate=f"FIRE {scenario_fire_age:.1f}a<extra>{label}</extra>",
+        ))
+        fig_min_fire.add_trace(go.Scatter(
+            x=[scenario_fire_age],
+            y=[y_max],
+            mode="text",
+            text=[f"FIRE {scenario_fire_age:.1f}a"],
+            textposition="top left",
+            textfont=dict(color=color, size=10),
+            legendgroup=label,
+            showlegend=False,
+            visible=default_visible,
+            hoverinfo="skip",
+        ))
+        fig_min_fire.add_trace(go.Scatter(
+            x=[scenario_fonte_age, scenario_fonte_age],
+            y=[0.0, y_max],
+            mode="lines",
+            line=dict(color="#FFB74D", dash="dot", width=1.3),
+            legendgroup=label,
+            showlegend=False,
+            visible=default_visible,
+            hovertemplate=f"Fon.te {scenario_fonte_age:.1f}a<extra>{label}</extra>",
+        ))
+        fig_min_fire.add_trace(go.Scatter(
+            x=[scenario_fonte_age],
+            y=[y_max * 0.94 if y_max > 0 else 0.0],
+            mode="text",
+            text=[f"Fon.te {scenario_fonte_age:.1f}a"],
+            textposition="top right",
+            textfont=dict(color="#FFB74D", size=10),
+            legendgroup=label,
+            showlegend=False,
+            visible=default_visible,
+            hoverinfo="skip",
+        ))
+
+    for x_val, color, label_txt in [
+        (cfg["pension_access_age"], "#CE93D8", f" INPS {cfg['pension_access_age']:.0f}a"),
+        (inheritance_age, "#8D6E63", f" Eredità {inheritance_age:.0f}a"),
+    ]:
+        fig_min_fire.add_vline(
+            x=x_val,
+            line_dash="dot",
+            line_color=color,
+            line_width=1.2,
+            annotation_text=label_txt,
+            annotation_position="top right",
+            annotation_font=dict(color=color, size=10),
+        )
+
+    fig_min_fire.update_layout(
+        title="Proiezione patrimonio alle età FIRE minime sostenibili",
+        xaxis_title="Età",
+        yaxis_title="Patrimonio (€)",
+        yaxis=dict(tickprefix="€", tickformat=",.0f"),
+        xaxis=dict(dtick=5),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=520,
+        margin=dict(r=160),
+    )
+    st.plotly_chart(fig_min_fire, use_container_width=True)
+
     st.divider()
 
     # ── Monte Carlo ──────────────────────────────────────────────────────────
@@ -507,7 +603,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
                 crash_prob_annual=cfg["crash_prob_annual"],
                 crash_impact=cfg["crash_impact"],
                 random_seed=seed_base,
-                **{**scenario_inputs[label], "threshold_swr": DETERMINISTIC_SWR},
+                **scenario_inputs[label],
             )
 
             df_path = scenario_paths[label]
@@ -516,7 +612,6 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
 
             fire_phase_kwargs = {
                 **scenario_inputs[label],
-                "threshold_swr": DETERMINISTIC_SWR,
                 "start_age": float(cfg["planned_retirement_age"]),
                 "planned_retirement_age": float(cfg["planned_retirement_age"]),
                 "portfolio_start": max(portfolio_at_fire_est, 100_000.0),
