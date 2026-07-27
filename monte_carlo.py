@@ -4,14 +4,23 @@ Simulazioni Monte Carlo per analisi di sostenibilita FIRE.
 Funzioni esportate:
 - monte_carlo_survival_given_initial()    -> probabilita di non esaurire il capitale
 - required_capital_for_target_survival()  -> capitale minimo per target di sopravvivenza
+
+Note: la binary search di required_capital_for_target_survival usa lo stesso
+random_seed per tutte le iterazioni, applicando di fatto Common Random Numbers
+(variance reduction). I percorsi sono quindi confrontabili tra capitali diversi
+ma il survival rate finale resta sempre stimato MC.
 """
 
 import numpy as np
 
-from constants import CAPITAL_GAINS_TAX
+from constants import DEFAULT_MUNICIPAL_SURTAX, DEFAULT_REGIONAL_SURTAX
 from pension_fonte import FonteState, step_fonte, fonte_real_monthly, fonte_tax_rate_by_enrollment
 from pension_inps import InpsState, annual_net_pension_from_gross, step_inps
-from portfolio import gross_withdrawal_for_net_expense
+from portfolio import (
+    effective_capital_gains_tax,
+    gross_withdrawal_for_net_expense,
+    portfolio_annual_drag,
+)
 
 
 def _monthly_rates(
@@ -24,10 +33,11 @@ def _monthly_rates(
     owner_cost_real_growth: float,
     real_estate_appreciation: float,
     inps_contribution_growth_rate: float,
-    inps_montante_revaluation_rate: float,
+    portfolio_drag: float,
 ) -> dict:
     """Calcola tutti i tassi mensili necessari alle simulazioni."""
-    real_annual = (1 + nominal_return) / (1 + inflation) - 1
+    nominal_after_drag = max(nominal_return - portfolio_drag, 0.0)
+    real_annual = (1 + nominal_after_drag) / (1 + inflation) - 1
     real_estate_real_annual = (1 + real_estate_appreciation) / (1 + inflation) - 1
     return dict(
         real_monthly_mean=(1 + real_annual) ** (1 / 12) - 1,
@@ -39,7 +49,6 @@ def _monthly_rates(
         owner_growth_monthly=(1 + owner_cost_real_growth) ** (1 / 12) - 1,
         real_estate_growth_monthly=(1 + real_estate_real_annual) ** (1 / 12) - 1,
         inps_contrib_growth_monthly=(1 + inps_contribution_growth_rate) ** (1 / 12) - 1,
-        inps_reval_monthly=(1 + inps_montante_revaluation_rate) ** (1 / 12) - 1,
     )
 
 
@@ -56,16 +65,18 @@ def _run_one_mc(
     owner_monthly_cost: float,
     owner_growth_monthly: float,
     pension_value: float,
+    fonte_contributions_paid: float,
     fonte_monthly: float,
     annual_pension_contribution: float,
     planned_retirement_age: float,
     fonte_access_age: int,
     fonte_enrollment_date: str,
     inps_montante_current: float,
-    inps_reval_monthly: float,
+    inps_montante_revaluation_rate: float,
     inps_contrib_growth_monthly: float,
     inps_annual_contribution: float,
     pension_access_age: int,
+    inps_coefficient_haircut: float,
     housing_mode: str,
     inheritance_age: int,
     inheritance_cash_amount: float,
@@ -76,24 +87,24 @@ def _run_one_mc(
     monthly_std: float,
     monthly_crash_prob: float,
     crash_impact: float,
+    capital_gains_rate: float,
+    regional_surtax: float,
+    municipal_surtax: float,
     start_age: float,
     months: int,
     rng: np.random.Generator,
 ) -> bool:
-    """Esegue una singola simulazione Monte Carlo e restituisce se sopravvive fino a fine periodo."""
+    """Esegue una singola simulazione Monte Carlo."""
     fonte_tax_rate = fonte_tax_rate_by_enrollment(
         fonte_enrollment_date, float(fonte_access_age), start_age
     )
 
-    fonte = FonteState(pot=pension_value)
+    fonte = FonteState(pot=pension_value, contributions_paid=fonte_contributions_paid)
     inps = InpsState(montante=inps_montante_current)
     inheritance_event_done = False
-    ages = []
-    portfolios = []
 
     for m in range(months + 1):
         age = start_age + m / 12
-        ages.append(age)
 
         fonte, delta_p, delta_cb = step_fonte(
             fonte,
@@ -113,11 +124,12 @@ def _run_one_mc(
             inps,
             m=m,
             age=age,
-            revaluation_monthly=inps_reval_monthly,
+            revaluation_annual=inps_montante_revaluation_rate,
             contribution_growth_monthly=inps_contrib_growth_monthly,
             inps_annual_contribution=inps_annual_contribution,
             planned_retirement_age=planned_retirement_age,
             pension_access_age=pension_access_age,
+            coefficient_haircut=inps_coefficient_haircut,
         )
 
         if not inheritance_event_done and age >= inheritance_age:
@@ -145,14 +157,19 @@ def _run_one_mc(
         if retired:
             monthly_post = monthly_expenses_t * post_fire_expense_multiplier
             monthly_inps = (
-                annual_net_pension_from_gross(inps.annual_pension) / 12 if inps.pension_started else 0.0
+                annual_net_pension_from_gross(
+                    inps.annual_pension,
+                    regional_surtax=regional_surtax,
+                    municipal_surtax=municipal_surtax,
+                ) / 12 if inps.pension_started else 0.0
             )
             net_expense = max(monthly_post - monthly_inps, 0.0)
             if net_expense > 0 and portfolio > 0:
                 gain_ratio = max(0.0, (portfolio - cost_basis) / portfolio)
-                effective_tax = CAPITAL_GAINS_TAX * gain_ratio
+                effective_tax = capital_gains_rate * gain_ratio
                 gross = gross_withdrawal_for_net_expense(net_expense, effective_tax)
-                cost_basis *= max(0.0, (portfolio - gross) / portfolio)
+                gross = min(gross, portfolio)
+                cost_basis *= max(0.0, (portfolio - gross) / portfolio) if portfolio > 0 else 0.0
                 cashflow_t = -gross
             else:
                 cashflow_t = 0.0
@@ -165,8 +182,11 @@ def _run_one_mc(
         if rng.random() < monthly_crash_prob:
             random_r += crash_impact
 
-        portfolio = portfolio * (1 + random_r) + cashflow_t
-        portfolios.append(max(0.0, portfolio))
+        if cashflow_t < 0:
+            mid_month_factor = (1 + random_r) ** 0.5 if random_r > -1 else 0.0
+            portfolio = portfolio * (1 + random_r) + cashflow_t * mid_month_factor
+        else:
+            portfolio = portfolio * (1 + random_r) + cashflow_t
 
         if retired and portfolio <= 0:
             return False
@@ -178,6 +198,7 @@ def _build_common_kwargs(
     simulate_kwargs: dict,
     inflation: float,
     crash_impact: float,
+    capital_gains_rate: float,
     start_age: float,
     months: int,
     rates: dict,
@@ -190,6 +211,7 @@ def _build_common_kwargs(
         rent_monthly_now=float(simulate_kwargs["rent_monthly_now"]),
         owner_monthly_cost=float(simulate_kwargs["owner_monthly_cost"]),
         pension_value=float(simulate_kwargs["pension_value"]),
+        fonte_contributions_paid=float(simulate_kwargs.get("fonte_contributions_paid", 0.0)),
         fonte_monthly=fonte_real_monthly(
             inflation,
             fonte_equity_return=float(simulate_kwargs.get("fonte_equity_return", 0.075)),
@@ -202,13 +224,20 @@ def _build_common_kwargs(
         fonte_access_age=int(simulate_kwargs.get("fonte_access_age", 50)),
         fonte_enrollment_date=str(simulate_kwargs.get("fonte_enrollment_date", "2021-04-01")),
         inps_montante_current=float(simulate_kwargs.get("inps_montante_current", 102456.0)),
+        inps_montante_revaluation_rate=float(
+            simulate_kwargs.get("inps_montante_revaluation_rate", 0.015)
+        ),
         inps_annual_contribution=float(simulate_kwargs.get("inps_annual_contribution", 18023.0)),
         pension_access_age=int(simulate_kwargs["pension_access_age"]),
+        inps_coefficient_haircut=float(simulate_kwargs.get("inps_coefficient_haircut", 0.0)),
         housing_mode=str(simulate_kwargs["housing_mode"]),
         inheritance_age=int(simulate_kwargs["inheritance_age"]),
         inheritance_cash_amount=float(simulate_kwargs["inheritance_cash_amount"]),
         full_house_value_today=float(simulate_kwargs["full_house_value_today"]),
         crash_impact=crash_impact,
+        capital_gains_rate=capital_gains_rate,
+        regional_surtax=float(simulate_kwargs.get("regional_surtax", DEFAULT_REGIONAL_SURTAX)),
+        municipal_surtax=float(simulate_kwargs.get("municipal_surtax", DEFAULT_MUNICIPAL_SURTAX)),
         start_age=start_age,
         months=months,
         **rates,
@@ -230,6 +259,11 @@ def monte_carlo_survival_given_initial(
     start_age = float(simulate_kwargs["start_age"])
     end_age = int(simulate_kwargs["end_age"])
     initial_gain_pct = float(simulate_kwargs.get("initial_gain_pct", 0.30))
+    state_bond_share = float(simulate_kwargs.get("state_bond_share", 0.0))
+    portfolio_ter = float(simulate_kwargs.get("portfolio_ter", 0.003))
+    stamp_duty_rate = float(simulate_kwargs.get("stamp_duty_rate", 0.002))
+    drag_annual = portfolio_annual_drag(ter=portfolio_ter, stamp_duty=stamp_duty_rate)
+    capital_gains_rate = effective_capital_gains_tax(state_bond_share)
 
     rates = _monthly_rates(
         nominal_return,
@@ -241,10 +275,12 @@ def monte_carlo_survival_given_initial(
         float(simulate_kwargs["owner_cost_real_growth"]),
         float(simulate_kwargs["real_estate_appreciation"]),
         float(simulate_kwargs.get("inps_contribution_growth_rate", 0.03)),
-        float(simulate_kwargs.get("inps_montante_revaluation_rate", 0.015)),
+        drag_annual,
     )
     months = int((end_age - start_age) * 12)
-    common = _build_common_kwargs(simulate_kwargs, inflation, crash_impact, start_age, months, rates)
+    common = _build_common_kwargs(
+        simulate_kwargs, inflation, crash_impact, capital_gains_rate, start_age, months, rates
+    )
     rng = np.random.default_rng(random_seed)
 
     success_count = sum(
@@ -269,10 +305,7 @@ def required_capital_for_target_survival(
     random_seed: int | None = None,
     **simulate_kwargs,
 ) -> tuple[float, float]:
-    """
-    Cerca il capitale iniziale minimo per avere probabilita target di sopravvivenza.
-    Restituisce (capitale_minimo, probabilita_effettiva).
-    """
+    """Capitale iniziale minimo per probabilità target di sopravvivenza."""
     low = 0.0
     high = max(float(simulate_kwargs["portfolio_start"]), 100_000.0)
 

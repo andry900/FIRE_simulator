@@ -13,6 +13,54 @@ from simulation import simulate
 from monte_carlo import required_capital_for_target_survival
 
 
+def _project_fonte_pot(
+    start_pot: float,
+    start_contributions: float,
+    age_now: float,
+    target_age: float,
+    planned_retirement_age: float,
+    cfg: dict,
+    fonte_monthly: float,
+    salary_growth_monthly: float,
+) -> tuple[float, float]:
+    """Proietta pot Fon.te e contributi cumulati da age_now a target_age."""
+    pot = start_pot
+    contributions = start_contributions
+    months_to_target = max(int(round((target_age - age_now) * 12)), 0)
+    for m in range(months_to_target + 1):
+        age_t = age_now + m / 12
+        if age_t < planned_retirement_age:
+            monthly_contrib = (
+                cfg["annual_pension_contribution"] * ((1 + salary_growth_monthly) ** m) / 12
+            )
+            pot = pot * (1 + fonte_monthly) + monthly_contrib
+            contributions += monthly_contrib
+        else:
+            pot = pot * (1 + fonte_monthly)
+    return pot, contributions
+
+
+def _project_inps_montante(
+    start_montante: float,
+    age_now: float,
+    target_age: float,
+    planned_retirement_age: float,
+    cfg: dict,
+    inps_contrib_growth_monthly: float,
+) -> float:
+    """Proietta il montante INPS da age_now a target_age (rivalutazione annuale)."""
+    montante = start_montante
+    months_to_target = max(int(round((target_age - age_now) * 12)), 0)
+    for m in range(months_to_target + 1):
+        age_t = age_now + m / 12
+        if age_t < planned_retirement_age:
+            monthly_inps = cfg["inps_annual_contribution"] * ((1 + inps_contrib_growth_monthly) ** m) / 12
+            montante += monthly_inps
+        if m > 0 and m % 12 == 0:
+            montante *= (1 + cfg["inps_montante_revaluation_rate"])
+    return montante
+
+
 def render(df: pd.DataFrame, cfg: dict) -> None:
     """
     Renderizza il tab FIRE completo.
@@ -113,11 +161,18 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         fonte_bond_return=cfg["fonte_bond_return"],
         fonte_equity_weight=cfg["fonte_equity_weight"],
         fonte_bond_weight=cfg["fonte_bond_weight"],
+        fonte_contributions_paid=cfg["fonte_contributions_paid"],
         inps_montante_current=cfg["inps_montante_current"],
         inps_annual_contribution=cfg["inps_annual_contribution"],
         inps_contribution_growth_rate=cfg["inps_contribution_growth_rate"],
         inps_montante_revaluation_rate=cfg["inps_montante_revaluation_rate"],
+        inps_coefficient_haircut=cfg["inps_coefficient_haircut"],
         initial_gain_pct=cfg["initial_gain_pct"],
+        state_bond_share=cfg["state_bond_share"],
+        portfolio_ter=cfg["portfolio_ter"],
+        stamp_duty_rate=cfg["stamp_duty_rate"],
+        regional_surtax=cfg["regional_surtax"],
+        municipal_surtax=cfg["municipal_surtax"],
         planned_retirement_age=cfg["planned_retirement_age"],
         inheritance_age=inheritance_age,
         inheritance_cash_amount=inheritance_cash_amount,
@@ -133,14 +188,14 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         "Affitto · Pessimista (5%)": (
             0.05, "#EF5350", "dash", "rent_life_with_sale", "legendonly"
         ),
+        f"Proprietà dopo eredità · Base ({nominal_return*100:.1f}%)": (
+            nominal_return, "#8D6E63", "solid", "owner_after_inheritance", True
+        ),
         f"Affitto · Base ({nominal_return*100:.1f}%)": (
             nominal_return, "#42A5F5", "solid", "rent_life_with_sale", True
         ),
         "Affitto · Ottimista (9%)": (
             0.09, "#66BB6A", "dot", "rent_life_with_sale", "legendonly"
-        ),
-        f"Proprietà dopo eredità · Base ({nominal_return*100:.1f}%)": (
-            nominal_return, "#8D6E63", "solid", "owner_after_inheritance", True
         ),
     }
 
@@ -220,7 +275,6 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         fonte_bond_weight=cfg["fonte_bond_weight"],
     )
     inps_contrib_growth_monthly = (1 + cfg["inps_contribution_growth_rate"]) ** (1 / 12) - 1
-    inps_reval_monthly = (1 + cfg["inps_montante_revaluation_rate"]) ** (1 / 12) - 1
 
     # Calcolo aliquota Fon.te dinamica basata su anni di iscrizione
     fonte_tax_rate_calculated = fonte_tax_rate_by_enrollment(
@@ -229,33 +283,43 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         age_now,
     )
 
-    # Proiezione Fon.te fino a età di sblocco (contributi fino a FIRE, poi sola crescita)
-    fonte_pot = pension_total
-    months_to_fonte = max(int(round((cfg["fonte_access_age"] - age_now) * 12)), 0)
-    for m in range(months_to_fonte + 1):
-        age_t = age_now + m / 12
-        if age_t < cfg["planned_retirement_age"]:
-            fonte_pot = (
-                fonte_pot * (1 + fonte_monthly)
-                + cfg["annual_pension_contribution"] * ((1 + salary_growth_monthly) ** m) / 12
-            )
-        else:
-            fonte_pot = fonte_pot * (1 + fonte_monthly)
-    fonte_net_at_unlock = fonte_pot * (1 - fonte_tax_rate_calculated)
+    # Proiezione Fon.te fino a età di sblocco
+    fonte_pot_at_unlock, fonte_contribs_at_unlock = _project_fonte_pot(
+        start_pot=pension_total,
+        start_contributions=cfg["fonte_contributions_paid"],
+        age_now=age_now,
+        target_age=cfg["fonte_access_age"],
+        planned_retirement_age=cfg["planned_retirement_age"],
+        cfg=cfg,
+        fonte_monthly=fonte_monthly,
+        salary_growth_monthly=salary_growth_monthly,
+    )
+    # Tassazione corretta: contributi tassati 9-15%, rendimenti già netti.
+    taxable_contribs = min(fonte_contribs_at_unlock, fonte_pot_at_unlock)
+    fonte_net_at_unlock = (
+        taxable_contribs * (1 - fonte_tax_rate_calculated)
+        + max(fonte_pot_at_unlock - taxable_contribs, 0.0)
+    )
 
-    # Proiezione INPS fino ad accesso pensione (contributi fino a FIRE, poi sola rivalutazione)
-    inps_montante = cfg["inps_montante_current"]
-    months_to_inps = max(int(round((cfg["pension_access_age"] - age_now) * 12)), 0)
-    for m in range(months_to_inps + 1):
-        age_t = age_now + m / 12
-        if age_t < cfg["planned_retirement_age"]:
-            monthly_inps = cfg["inps_annual_contribution"] * ((1 + inps_contrib_growth_monthly) ** m) / 12
-            inps_montante = inps_montante * (1 + inps_reval_monthly) + monthly_inps
-        else:
-            inps_montante = inps_montante * (1 + inps_reval_monthly)
-    inps_coeff = inps_transformation_coefficient(float(cfg["pension_access_age"]))
+    # Proiezione INPS fino ad accesso pensione
+    inps_montante = _project_inps_montante(
+        start_montante=cfg["inps_montante_current"],
+        age_now=age_now,
+        target_age=cfg["pension_access_age"],
+        planned_retirement_age=cfg["planned_retirement_age"],
+        cfg=cfg,
+        inps_contrib_growth_monthly=inps_contrib_growth_monthly,
+    )
+    inps_coeff = inps_transformation_coefficient(
+        float(cfg["pension_access_age"]),
+        future_haircut=cfg["inps_coefficient_haircut"],
+    )
     inps_annual_lorda = inps_montante * inps_coeff
-    inps_monthly_netta = annual_net_pension_from_gross(inps_annual_lorda) / 12
+    inps_monthly_netta = annual_net_pension_from_gross(
+        inps_annual_lorda,
+        regional_surtax=cfg["regional_surtax"],
+        municipal_surtax=cfg["municipal_surtax"],
+    ) / 12
 
     inheritance_cash_real_at_unlock = inheritance_cash_real_at_inh
 
@@ -269,7 +333,11 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             "Voce": "Fon.te (netto al primo sblocco)",
             "Età sblocco": f"{cfg['fonte_access_age']:.0f}",
             "Valore stimato": fonte_net_at_unlock,
-            "Note": f"Al netto imposta {fonte_tax_rate_calculated * 100:.2f}%",
+            "Note": (
+                f"Pot lordo €{fonte_pot_at_unlock:,.0f}, contributi cumulati "
+                f"€{fonte_contribs_at_unlock:,.0f} tassati al {fonte_tax_rate_calculated*100:.2f}%; "
+                "rendimenti già netti (sostitutiva 20%/12,5%)."
+            ),
         },
         {
             "Voce": "Eredità cash",
@@ -287,7 +355,10 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             "Voce": "Pensione INPS netta mensile",
             "Età sblocco": f"{cfg['pension_access_age']:.0f}",
             "Valore stimato": inps_monthly_netta,
-            "Note": f"Coeff. INPS {inps_coeff * 100:.3f}% + IRPEF a scaglioni/detrazione pensione",
+            "Note": (
+                f"Coeff. INPS {inps_coeff * 100:.3f}% (haircut {cfg['inps_coefficient_haircut']*100:.0f}%) + "
+                "IRPEF a scaglioni + detrazione pensione + addizionali."
+            ),
         },
     ])
     future_assets_df["Valore stimato"] = future_assets_df["Valore stimato"].map(lambda x: f"€{x:,.0f}")
@@ -324,6 +395,12 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         float(cfg["crash_impact"]),
         float(cfg["planned_retirement_age"]),
         float(cfg["nominal_return"]),
+        float(cfg["portfolio_ter"]),
+        float(cfg["stamp_duty_rate"]),
+        float(cfg["state_bond_share"]),
+        float(cfg["regional_surtax"]),
+        float(cfg["municipal_surtax"]),
+        float(cfg["inps_coefficient_haircut"]),
     )
     if st.session_state.get("mc_target_signature") != mc_signature:
         st.session_state["mc_target_signature"] = mc_signature
@@ -331,28 +408,25 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
 
     run_mc = st.button("Esegui simulazione Target FIRE Monte Carlo", type="primary")
 
-    # Valori previdenziali stimati all'età FIRE (da usare nel calcolo del target a FIRE)
-    months_to_fire = max(int(round((cfg["planned_retirement_age"] - age_now) * 12)), 0)
-
-    fonte_pot_at_fire = pension_total
-    for m in range(months_to_fire + 1):
-        age_t = age_now + m / 12
-        if age_t < cfg["planned_retirement_age"]:
-            fonte_pot_at_fire = (
-                fonte_pot_at_fire * (1 + fonte_monthly)
-                + cfg["annual_pension_contribution"] * ((1 + salary_growth_monthly) ** m) / 12
-            )
-        else:
-            fonte_pot_at_fire = fonte_pot_at_fire * (1 + fonte_monthly)
-
-    inps_montante_at_fire = cfg["inps_montante_current"]
-    for m in range(months_to_fire + 1):
-        age_t = age_now + m / 12
-        if age_t < cfg["planned_retirement_age"]:
-            monthly_inps = cfg["inps_annual_contribution"] * ((1 + inps_contrib_growth_monthly) ** m) / 12
-            inps_montante_at_fire = inps_montante_at_fire * (1 + inps_reval_monthly) + monthly_inps
-        else:
-            inps_montante_at_fire = inps_montante_at_fire * (1 + inps_reval_monthly)
+    # Valori previdenziali stimati all'età FIRE (per il calcolo del target a FIRE)
+    fonte_pot_at_fire, fonte_contribs_at_fire = _project_fonte_pot(
+        start_pot=pension_total,
+        start_contributions=cfg["fonte_contributions_paid"],
+        age_now=age_now,
+        target_age=cfg["planned_retirement_age"],
+        planned_retirement_age=cfg["planned_retirement_age"],
+        cfg=cfg,
+        fonte_monthly=fonte_monthly,
+        salary_growth_monthly=salary_growth_monthly,
+    )
+    inps_montante_at_fire = _project_inps_montante(
+        start_montante=cfg["inps_montante_current"],
+        age_now=age_now,
+        target_age=cfg["planned_retirement_age"],
+        planned_retirement_age=cfg["planned_retirement_age"],
+        cfg=cfg,
+        inps_contrib_growth_monthly=inps_contrib_growth_monthly,
+    )
 
     base_rent_label = f"Affitto · Base ({nominal_return*100:.1f}%)"
     base_owner_label = f"Proprietà dopo eredità · Base ({nominal_return*100:.1f}%)"
@@ -391,6 +465,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
                 "planned_retirement_age": float(cfg["planned_retirement_age"]),
                 "portfolio_start": max(portfolio_at_fire_est, 100_000.0),
                 "pension_value": fonte_pot_at_fire,
+                "fonte_contributions_paid": fonte_contribs_at_fire,
                 "inps_montante_current": inps_montante_at_fire,
             }
             target_capital_fire, target_prob_fire = required_capital_for_target_survival(

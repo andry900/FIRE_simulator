@@ -61,7 +61,14 @@ def init_db() -> None:
             inps_montante_revaluation_rate   REAL    DEFAULT 0.015,
             inps_pension_coefficient         REAL    DEFAULT 0.065,
             inps_irpef_rate                  REAL    DEFAULT 0.20,
-            initial_gain_pct                 REAL    DEFAULT 0.30
+            inps_coefficient_haircut         REAL    DEFAULT 0.0,
+            initial_gain_pct                 REAL    DEFAULT 0.30,
+            fonte_contributions_paid         REAL    DEFAULT 0.0,
+            state_bond_share                 REAL    DEFAULT 0.0,
+            portfolio_ter                    REAL    DEFAULT 0.003,
+            stamp_duty_rate                  REAL    DEFAULT 0.002,
+            regional_surtax                  REAL    DEFAULT 0.0173,
+            municipal_surtax                 REAL    DEFAULT 0.008
         );
 
         CREATE TABLE IF NOT EXISTS category_return_assumptions (
@@ -175,6 +182,13 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
         ("inps_pension_coefficient",     "REAL DEFAULT 0.065"),
         ("inps_irpef_rate",              "REAL DEFAULT 0.20"),
         ("initial_gain_pct",             "REAL DEFAULT 0.30"),
+        ("inps_coefficient_haircut",     "REAL DEFAULT 0.0"),
+        ("fonte_contributions_paid",     "REAL DEFAULT 0.0"),
+        ("state_bond_share",             "REAL DEFAULT 0.0"),
+        ("portfolio_ter",                "REAL DEFAULT 0.003"),
+        ("stamp_duty_rate",              "REAL DEFAULT 0.002"),
+        ("regional_surtax",              "REAL DEFAULT 0.0173"),
+        ("municipal_surtax",             "REAL DEFAULT 0.008"),
     ]
     for col_name, col_def in extra_columns:
         if col_name not in cols:
@@ -194,15 +208,40 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
 
 
 def _drop_legacy_fonte_return_columns(conn: sqlite3.Connection) -> None:
-    """Rimuove colonne legacy non più usate, se SQLite supporta DROP COLUMN."""
+    """Rimuove colonne legacy non più usate, se SQLite supporta DROP COLUMN.
+
+    Colonne droppate:
+    - fonte_equity_return / fonte_bond_return: sostituite dai valori in
+      category_return_assumptions (Azionario ETF / Obbligazionario).
+    - inheritance_cash_amount: ora calcolato dagli asset categoria
+      "Immobiliare", subcategory "Cash" (vedi views/fire_tab.py).
+    - inps_pension_coefficient: sostituito dalla tabella deterministica
+      INPS_TRANSFORMATION_COEFFICIENTS (pension_inps.py).
+    - inps_irpef_rate: sostituito da IRPEF a scaglioni + addizionali
+      (pension_inps.py::annual_net_pension_from_gross).
+    """
+    legacy_columns = (
+        "fonte_equity_return",
+        "fonte_bond_return",
+        "inheritance_cash_amount",
+        "inps_pension_coefficient",
+        "inps_irpef_rate",
+    )
     cols = {row[1] for row in conn.execute("PRAGMA table_info(simulation_params)").fetchall()}
-    for col_name in ("fonte_equity_return", "fonte_bond_return"):
+    for col_name in legacy_columns:
         if col_name in cols:
             try:
                 conn.execute(f"ALTER TABLE simulation_params DROP COLUMN {col_name}")
             except sqlite3.OperationalError:
-                # Se il runtime SQLite non supporta DROP COLUMN, mantieni la compatibilità.
-                pass
+                # SQLite < 3.35 non supporta DROP COLUMN: la colonna sopravvive
+                # ma non viene letta dal codice. Logghiamo per visibilità.
+                import warnings
+                warnings.warn(
+                    f"Impossibile droppare la colonna legacy '{col_name}' "
+                    "(SQLite troppo vecchio per ALTER TABLE DROP COLUMN). "
+                    "La colonna resta nello schema ma è ignorata dal codice.",
+                    stacklevel=2,
+                )
 
 
 def _ensure_real_estate_assets(conn: sqlite3.Connection) -> None:
@@ -298,7 +337,14 @@ def save_params(params: dict) -> None:
                    inps_annual_contribution=:inps_annual_contribution,
                    inps_contribution_growth_rate=:inps_contribution_growth_rate,
                    inps_montante_revaluation_rate=:inps_montante_revaluation_rate,
-                   initial_gain_pct=:initial_gain_pct
+                   inps_coefficient_haircut=:inps_coefficient_haircut,
+                   initial_gain_pct=:initial_gain_pct,
+                   fonte_contributions_paid=:fonte_contributions_paid,
+                   state_bond_share=:state_bond_share,
+                   portfolio_ter=:portfolio_ter,
+                   stamp_duty_rate=:stamp_duty_rate,
+                   regional_surtax=:regional_surtax,
+                   municipal_surtax=:municipal_surtax
                WHERE id=1""",
             params,
         )

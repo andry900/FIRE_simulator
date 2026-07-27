@@ -8,10 +8,14 @@ Funzioni esportate:
 
 import pandas as pd
 
-from constants import CAPITAL_GAINS_TAX
+from constants import DEFAULT_MUNICIPAL_SURTAX, DEFAULT_REGIONAL_SURTAX
 from pension_fonte import FonteState, step_fonte, fonte_real_monthly, fonte_tax_rate_by_enrollment
 from pension_inps import InpsState, annual_net_pension_from_gross, step_inps
-from portfolio import gross_withdrawal_for_net_expense
+from portfolio import (
+    effective_capital_gains_tax,
+    gross_withdrawal_for_net_expense,
+    portfolio_annual_drag,
+)
 
 
 def simulate(
@@ -44,20 +48,39 @@ def simulate(
     fonte_bond_return: float = 0.035,
     fonte_equity_weight: float = 0.60,
     fonte_bond_weight: float = 0.40,
+    fonte_contributions_paid: float = 0.0,
     inps_montante_current: float = 102456.0,
     inps_annual_contribution: float = 18023.0,
     inps_contribution_growth_rate: float = 0.03,
     inps_montante_revaluation_rate: float = 0.015,
+    inps_coefficient_haircut: float = 0.0,
     initial_gain_pct: float = 0.30,
+    state_bond_share: float = 0.0,
+    portfolio_ter: float = 0.003,
+    stamp_duty_rate: float = 0.002,
+    regional_surtax: float = DEFAULT_REGIONAL_SURTAX,
+    municipal_surtax: float = DEFAULT_MUNICIPAL_SURTAX,
 ) -> tuple[pd.DataFrame, bool]:
-    """
-    Proietta il patrimonio in euro reali (inflazione rimossa).
-    Dopo planned_retirement_age lo stipendio viene azzerato e restano solo le spese.
-    Tassazione sui prelievi: 26% solo sulla quota plusvalenza (gain_ratio dinamico).
+    """Proietta il patrimonio in euro reali (inflazione rimossa).
+
+    - Dopo planned_retirement_age lo stipendio viene azzerato e restano solo le spese.
+    - Tassazione sui prelievi: aliquota mista 26% / 12,5% (titoli di Stato),
+      pesata per state_bond_share, applicata solo sulla quota plusvalenza
+      (gain_ratio dinamico).
+    - Drag annuo: TER ETF + bollo titoli sottratti dal rendimento.
+    - INPS: rivalutazione annuale, addizionali regionale/comunale incluse.
+    - Fon.te: rendimento netto post imposta sostitutiva 20%/12,5%; in uscita
+      tassati solo i contributi (9-15%).
+
     Restituisce (DataFrame mensile, successo_a_fine_periodo).
     """
-    real_annual = (1 + nominal_return) / (1 + inflation) - 1
+    # Drag e aliquota effettiva
+    drag_annual = portfolio_annual_drag(ter=portfolio_ter, stamp_duty=stamp_duty_rate)
+    nominal_after_drag = max(nominal_return - drag_annual, 0.0)
+    real_annual = (1 + nominal_after_drag) / (1 + inflation) - 1
     real_monthly = (1 + real_annual) ** (1 / 12) - 1
+    capital_gains_rate = effective_capital_gains_tax(state_bond_share)
+
     f_monthly = fonte_real_monthly(
         inflation,
         fonte_equity_return=fonte_equity_return,
@@ -73,7 +96,6 @@ def simulate(
     real_estate_real_annual = (1 + real_estate_appreciation) / (1 + inflation) - 1
     real_estate_growth_monthly = (1 + real_estate_real_annual) ** (1 / 12) - 1
     inps_contrib_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
-    inps_reval_monthly = (1 + inps_montante_revaluation_rate) ** (1 / 12) - 1
     fonte_tax_rate = fonte_tax_rate_by_enrollment(
         fonte_enrollment_date, float(fonte_access_age), start_age
     )
@@ -83,7 +105,7 @@ def simulate(
     portfolio = portfolio_start
     cost_basis = portfolio_start * (1 - initial_gain_pct)
 
-    fonte = FonteState(pot=pension_value)
+    fonte = FonteState(pot=pension_value, contributions_paid=fonte_contributions_paid)
     inps = InpsState(montante=inps_montante_current)
     inheritance_event_done = False
     success = True
@@ -105,15 +127,16 @@ def simulate(
         portfolio += delta_p
         cost_basis += delta_cb
 
-        # ── INPS ─────────────────────────────────────────────────────────────
+        # ── INPS (rivalutazione annuale a fine anno) ─────────────────────────
         inps = step_inps(
             inps,
             m=m, age=age,
-            revaluation_monthly=inps_reval_monthly,
+            revaluation_annual=inps_montante_revaluation_rate,
             contribution_growth_monthly=inps_contrib_growth_monthly,
             inps_annual_contribution=inps_annual_contribution,
             planned_retirement_age=planned_retirement_age,
             pension_access_age=pension_access_age,
+            coefficient_haircut=inps_coefficient_haircut,
         )
 
         # ── Eredità ──────────────────────────────────────────────────────────
@@ -143,7 +166,11 @@ def simulate(
 
         # ── FIRE number (per visualizzazione) ────────────────────────────────
         if inps.pension_started:
-            annual_inps_net = annual_net_pension_from_gross(inps.annual_pension)
+            annual_inps_net = annual_net_pension_from_gross(
+                inps.annual_pension,
+                regional_surtax=regional_surtax,
+                municipal_surtax=municipal_surtax,
+            )
             net_for_fire = max(annual_expenses_post - annual_inps_net, 0)
         else:
             net_for_fire = annual_expenses_post
@@ -160,15 +187,20 @@ def simulate(
         if retired:
             monthly_post = monthly_expenses_t * post_fire_expense_multiplier
             monthly_inps = (
-                annual_net_pension_from_gross(inps.annual_pension) / 12
+                annual_net_pension_from_gross(
+                    inps.annual_pension,
+                    regional_surtax=regional_surtax,
+                    municipal_surtax=municipal_surtax,
+                ) / 12
                 if inps.pension_started else 0.0
             )
             net_expense = max(monthly_post - monthly_inps, 0.0)
             if net_expense > 0 and portfolio > 0:
                 gain_ratio = max(0.0, (portfolio - cost_basis) / portfolio)
-                effective_tax = CAPITAL_GAINS_TAX * gain_ratio
+                effective_tax = capital_gains_rate * gain_ratio
                 gross = gross_withdrawal_for_net_expense(net_expense, effective_tax)
-                cost_basis *= max(0.0, (portfolio - gross) / portfolio)
+                gross = min(gross, portfolio)  # non prelevare più di quanto disponibile
+                cost_basis *= max(0.0, (portfolio - gross) / portfolio) if portfolio > 0 else 0.0
                 cashflow_t = -gross
             else:
                 cashflow_t = 0.0
@@ -177,7 +209,20 @@ def simulate(
             if cashflow_t > 0:
                 cost_basis += cashflow_t
 
-        portfolio = portfolio * (1 + real_monthly) + cashflow_t
+        # Convenzione: prelievi a inizio mese (più conservativo per il
+        # pensionato), accumuli a fine mese. In pratica: il rendimento mensile
+        # si applica al saldo dopo cashflow se questo è negativo, prima se è
+        # positivo. Approssimazione: applichiamo metà rendimento sul cashflow
+        # negativo per non penalizzare/favorire eccessivamente.
+        if cashflow_t < 0:
+            # Prelievo a metà mese: il saldo prelevato perde mezza mensilità di
+            # rendimento composto.
+            mid_month_factor = (1 + real_monthly) ** 0.5
+            portfolio = portfolio * (1 + real_monthly) + cashflow_t * mid_month_factor
+        else:
+            # Accumulo end-of-month: stipendio non rende quel mese (ok).
+            portfolio = portfolio * (1 + real_monthly) + cashflow_t
+
         if retired and portfolio <= 0:
             portfolio = 0
             success = False
@@ -189,11 +234,7 @@ def simulate(
 
 
 def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
-    """
-    Trova l'età FIRE minima sostenibile tramite binary search.
-    Logica: qual è la prima età in cui, smettendo di lavorare, il portafoglio
-    non si esaurisce mai fino a end_age?
-    """
+    """Trova l'età FIRE minima sostenibile tramite binary search."""
     start_age = float(simulate_kwargs["start_age"])
     end_age = int(simulate_kwargs["end_age"])
 

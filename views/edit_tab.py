@@ -30,7 +30,7 @@ def _asset_expanders(subset: pd.DataFrame) -> None:
                 "Valore (€)", value=float(row["current_value"]),
                 key=f"v_{row['id']}", format="%.2f", min_value=0.0, step=10.0,
             )
-            qty_val = float(row["quantity"]) if row["quantity"] is not None else 0.0
+            qty_val = float(row["quantity"]) if pd.notna(row["quantity"]) else 0.0
             new_qty = col2.number_input(
                 "Quantità", value=qty_val,
                 key=f"q_{row['id']}", format="%.4f", min_value=0.0,
