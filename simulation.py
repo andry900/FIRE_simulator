@@ -42,7 +42,8 @@ def simulate(
     start_age: float,
     end_age: int,
     annual_pension_contribution: float = 8211.0,
-    fonte_access_age: int = 50,
+    fonte_access_age: float = 50.0,
+    fonte_unlock_years_after_fire: float | None = None,
     fonte_enrollment_date: str = "2021-04-01",
     fonte_equity_return: float = 0.075,
     fonte_bond_return: float = 0.035,
@@ -53,6 +54,9 @@ def simulate(
     inps_annual_contribution: float = 18023.0,
     inps_contribution_growth_rate: float = 0.03,
     inps_montante_revaluation_rate: float = 0.015,
+    inps_years_contributed_current: float = 10.0,
+    inps_fill_missing_years: bool = False,
+    inps_gross_factor: float = 1.0,
     inps_coefficient_haircut: float = 0.0,
     initial_gain_pct: float = 0.30,
     state_bond_share: float = 0.0,
@@ -93,11 +97,17 @@ def simulate(
     rent_growth_monthly = (1 + rent_real_growth) ** (1 / 12) - 1
     owner_growth_monthly = (1 + owner_cost_real_growth) ** (1 / 12) - 1
     inflation_monthly = (1 + inflation) ** (1 / 12) - 1
+    fonte_post_fire_real_monthly = (1 / (1 + inflation_monthly)) - 1
     real_estate_real_annual = (1 + real_estate_appreciation) / (1 + inflation) - 1
     real_estate_growth_monthly = (1 + real_estate_real_annual) ** (1 / 12) - 1
     inps_contrib_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
     fonte_tax_rate = fonte_tax_rate_by_enrollment(
         fonte_enrollment_date, float(fonte_access_age), start_age
+    )
+    effective_fonte_access_age = (
+        float(planned_retirement_age) + max(float(fonte_unlock_years_after_fire), 0.0)
+        if fonte_unlock_years_after_fire is not None
+        else float(fonte_access_age)
     )
 
     months = int((end_age - start_age) * 12)
@@ -106,7 +116,10 @@ def simulate(
     cost_basis = portfolio_start * (1 - initial_gain_pct)
 
     fonte = FonteState(pot=pension_value, contributions_paid=fonte_contributions_paid)
-    inps = InpsState(montante=inps_montante_current)
+    inps = InpsState(
+        montante=inps_montante_current,
+        contributed_years=max(float(inps_years_contributed_current), 0.0),
+    )
     inheritance_event_done = False
     success = True
 
@@ -118,10 +131,11 @@ def simulate(
             fonte,
             m=m, age=age,
             monthly_rate=f_monthly,
+            monthly_rate_post_fire=fonte_post_fire_real_monthly,
             salary_growth_monthly=salary_growth_monthly,
             annual_pension_contribution=annual_pension_contribution,
             planned_retirement_age=planned_retirement_age,
-            fonte_access_age=fonte_access_age,
+            fonte_access_age=effective_fonte_access_age,
             fonte_tax_rate=fonte_tax_rate,
         )
         portfolio += delta_p
@@ -136,7 +150,10 @@ def simulate(
             inps_annual_contribution=inps_annual_contribution,
             planned_retirement_age=planned_retirement_age,
             pension_access_age=pension_access_age,
+            years_contributed_required=20.0,
+            fill_missing_years_after_fire=inps_fill_missing_years,
             coefficient_haircut=inps_coefficient_haircut,
+            gross_pension_factor=inps_gross_factor,
         )
 
         # ── Eredità ──────────────────────────────────────────────────────────

@@ -25,6 +25,8 @@ from constants import DEFAULT_MUNICIPAL_SURTAX, DEFAULT_REGIONAL_SURTAX
 # Valori in frazione (es. 5,608% -> 0.05608).
 # Fonte: Decreto Ministero del Lavoro 22/05/2024 — coefficienti revisione
 # triennale, in vigore dal 1° gennaio 2025.
+# Nota: per le età 72-75 usiamo una estensione stimata e monotona della
+# progressione 67-71, utile per analisi what-if oltre il range ufficiale.
 INPS_TRANSFORMATION_COEFFICIENTS: dict[int, float] = {
     57: 0.04186,
     58: 0.04289,
@@ -41,12 +43,17 @@ INPS_TRANSFORMATION_COEFFICIENTS: dict[int, float] = {
     69: 0.06034,
     70: 0.06273,
     71: 0.06530,
+    72: 0.06805,
+    73: 0.07098,
+    74: 0.07409,
+    75: 0.07738,
 }
 
 
 @dataclass
 class InpsState:
     montante: float                # montante contributivo accumulato (EUR)
+    contributed_years: float = 0.0 # anni contributivi maturati
     pension_started: bool = False  # True dopo avvio erogazione
     annual_pension: float = 0.0    # rendita annua lorda (EUR)
 
@@ -132,7 +139,10 @@ def step_inps(
     inps_annual_contribution: float,
     planned_retirement_age: float,
     pension_access_age: int,
+    years_contributed_required: float = 20.0,
+    fill_missing_years_after_fire: bool = False,
     coefficient_haircut: float = 0.0,
+    gross_pension_factor: float = 1.0,
 ) -> InpsState:
     """Avanza lo stato INPS di un mese.
 
@@ -145,26 +155,45 @@ def step_inps(
         return state
 
     montante = state.montante
-    if age < planned_retirement_age:
+    contributed_years = state.contributed_years
+    required_years = max(0.0, float(years_contributed_required))
+
+    should_contribute = age < planned_retirement_age
+    if (not should_contribute) and fill_missing_years_after_fire and contributed_years < required_years:
+        should_contribute = True
+
+    if should_contribute:
         monthly_contrib = (
             inps_annual_contribution
             * ((1 + contribution_growth_monthly) ** m)
             / 12
         )
         montante = montante + monthly_contrib
+        contributed_years += (1 / 12)
 
     # Rivalutazione annuale al termine di ogni anno di simulazione.
     if m > 0 and m % 12 == 0:
         montante = montante * (1 + revaluation_annual)
 
-    if age >= pension_access_age:
+    if age >= pension_access_age and contributed_years >= required_years:
         coeff = inps_transformation_coefficient(
             float(pension_access_age), future_haircut=coefficient_haircut
         )
-        annual_pension = montante * coeff
-        return InpsState(montante=montante, pension_started=True, annual_pension=annual_pension)
+        factor = max(0.3, min(1.0, float(gross_pension_factor)))
+        annual_pension = montante * coeff * factor
+        return InpsState(
+            montante=montante,
+            contributed_years=contributed_years,
+            pension_started=True,
+            annual_pension=annual_pension,
+        )
 
-    return InpsState(montante=montante, pension_started=False, annual_pension=0.0)
+    return InpsState(
+        montante=montante,
+        contributed_years=contributed_years,
+        pension_started=False,
+        annual_pension=0.0,
+    )
 
 
 def project_inps_pension(
@@ -173,10 +202,12 @@ def project_inps_pension(
     years_to_pension: float,
     pension_access_age: int,
     coefficient_haircut: float = 0.0,
+    gross_pension_factor: float = 1.0,
 ) -> float:
     """Stima pensione annua lorda al momento dell'accesso (solo rivalutazione)."""
     projected_montante = montante_current * ((1 + revaluation_rate) ** years_to_pension)
     coeff = inps_transformation_coefficient(
         float(pension_access_age), future_haircut=coefficient_haircut
     )
-    return projected_montante * coeff
+    factor = max(0.3, min(1.0, float(gross_pension_factor)))
+    return projected_montante * coeff * factor

@@ -9,7 +9,7 @@ import pandas as pd
 from constants import BIRTH_DATE, DETERMINISTIC_SWR
 from pension_fonte import fonte_real_monthly, fonte_tax_rate_by_enrollment
 from pension_inps import annual_net_pension_from_gross, inps_transformation_coefficient
-from simulation import simulate
+from simulation import simulate, find_fire_age
 from monte_carlo import required_capital_for_target_survival
 
 
@@ -21,6 +21,7 @@ def _project_fonte_pot(
     planned_retirement_age: float,
     cfg: dict,
     fonte_monthly: float,
+    fonte_post_fire_monthly: float,
     salary_growth_monthly: float,
 ) -> tuple[float, float]:
     """Proietta pot Fon.te e contributi cumulati da age_now a target_age."""
@@ -36,29 +37,43 @@ def _project_fonte_pot(
             pot = pot * (1 + fonte_monthly) + monthly_contrib
             contributions += monthly_contrib
         else:
-            pot = pot * (1 + fonte_monthly)
+            pot = pot * (1 + fonte_post_fire_monthly)
     return pot, contributions
 
 
 def _project_inps_montante(
     start_montante: float,
+    start_contributed_years: float,
     age_now: float,
     target_age: float,
     planned_retirement_age: float,
+    pension_access_age: int,
+    fill_missing_years_after_fire: bool,
     cfg: dict,
     inps_contrib_growth_monthly: float,
-) -> float:
-    """Proietta il montante INPS da age_now a target_age (rivalutazione annuale)."""
+) -> tuple[float, float]:
+    """Proietta montante e anni contributivi INPS fino a target_age."""
     montante = start_montante
+    contributed_years = max(float(start_contributed_years), 0.0)
     months_to_target = max(int(round((target_age - age_now) * 12)), 0)
     for m in range(months_to_target + 1):
         age_t = age_now + m / 12
-        if age_t < planned_retirement_age:
+        should_contribute = age_t < planned_retirement_age
+        if (
+            not should_contribute
+            and fill_missing_years_after_fire
+            and age_t < float(pension_access_age)
+            and contributed_years < 20.0
+        ):
+            should_contribute = True
+
+        if should_contribute:
             monthly_inps = cfg["inps_annual_contribution"] * ((1 + inps_contrib_growth_monthly) ** m) / 12
             montante += monthly_inps
+            contributed_years += (1 / 12)
         if m > 0 and m % 12 == 0:
             montante *= (1 + cfg["inps_montante_revaluation_rate"])
-    return montante
+    return montante, contributed_years
 
 
 def render(df: pd.DataFrame, cfg: dict) -> None:
@@ -156,6 +171,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         pension_access_age=cfg["pension_access_age"],
         annual_pension_contribution=cfg["annual_pension_contribution"],
         fonte_access_age=cfg["fonte_access_age"],
+        fonte_unlock_years_after_fire=max(cfg["fonte_access_age"] - cfg["planned_retirement_age"], 0.0),
         fonte_enrollment_date=cfg["fonte_enrollment_date"],
         fonte_equity_return=cfg["fonte_equity_return"],
         fonte_bond_return=cfg["fonte_bond_return"],
@@ -166,6 +182,9 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         inps_annual_contribution=cfg["inps_annual_contribution"],
         inps_contribution_growth_rate=cfg["inps_contribution_growth_rate"],
         inps_montante_revaluation_rate=cfg["inps_montante_revaluation_rate"],
+        inps_years_contributed_current=cfg["inps_years_contributed_current"],
+        inps_fill_missing_years=cfg["inps_fill_missing_years"],
+        inps_gross_factor=cfg["inps_gross_factor"],
         inps_coefficient_haircut=cfg["inps_coefficient_haircut"],
         initial_gain_pct=cfg["initial_gain_pct"],
         state_bond_share=cfg["state_bond_share"],
@@ -184,9 +203,11 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
 
     # ── Scenari ──────────────────────────────────────────────────────────────
     nominal_return = cfg["nominal_return"]
+    pessimistic_return = max(0.0, nominal_return - 0.03)
+    optimistic_return = nominal_return + 0.03
     scenarios = {
-        "Affitto · Pessimista (5%)": (
-            0.05, "#EF5350", "dash", "rent_life_with_sale", "legendonly"
+        f"Affitto · Pessimista ({pessimistic_return*100:.1f}%)": (
+            pessimistic_return, "#EF5350", "dash", "rent_life_with_sale", "legendonly"
         ),
         f"Proprietà dopo eredità · Base ({nominal_return*100:.1f}%)": (
             nominal_return, "#8D6E63", "solid", "owner_after_inheritance", True
@@ -194,28 +215,21 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         f"Affitto · Base ({nominal_return*100:.1f}%)": (
             nominal_return, "#42A5F5", "solid", "rent_life_with_sale", True
         ),
-        "Affitto · Ottimista (9%)": (
-            0.09, "#66BB6A", "dot", "rent_life_with_sale", "legendonly"
+        f"Affitto · Ottimista ({optimistic_return*100:.1f}%)": (
+            optimistic_return, "#66BB6A", "dot", "rent_life_with_sale", "legendonly"
         ),
     }
 
     fig = go.Figure()
-    fire_ages: dict[str, float | None] = {}
+    min_sustainable_fire_ages: dict[str, float | None] = {}
     deterministic_success: dict[str, bool] = {}
     scenario_inputs: dict[str, dict] = {}
     scenario_paths: dict[str, pd.DataFrame] = {}
 
-    def first_swr_crossing_age(df_path: pd.DataFrame) -> float | None:
-        """Prima età in cui il patrimonio supera la soglia SWR (portfolio >= fire_number)."""
-        crossed = df_path[df_path["portfolio"] >= df_path["fire_number"]]
-        if crossed.empty:
-            return None
-        return float(crossed.iloc[0]["age"])
-
     for label, (ret, color, dash, housing_mode, default_visible) in scenarios.items():
         sim_kwargs = {**base_sim_kwargs, "nominal_return": ret, "housing_mode": housing_mode}
         df_sim, ok_end = simulate(**sim_kwargs)
-        fire_ages[label] = first_swr_crossing_age(df_sim)
+        min_sustainable_fire_ages[label] = find_fire_age(precision=0.1, **sim_kwargs)
         deterministic_success[label] = ok_end
         scenario_inputs[label] = sim_kwargs
         scenario_paths[label] = df_sim
@@ -267,6 +281,8 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
 
     # ── Asset futuri a sblocco (valori reali, euro di oggi) ────────────────
     salary_growth_monthly = (1 + cfg["salary_growth_rate"]) ** (1 / 12) - 1
+    inflation_monthly = (1 + cfg["inflation"]) ** (1 / 12) - 1
+    fonte_post_fire_monthly = (1 / (1 + inflation_monthly)) - 1
     fonte_monthly = fonte_real_monthly(
         cfg["inflation"],
         fonte_equity_return=cfg["fonte_equity_return"],
@@ -292,6 +308,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         planned_retirement_age=cfg["planned_retirement_age"],
         cfg=cfg,
         fonte_monthly=fonte_monthly,
+        fonte_post_fire_monthly=fonte_post_fire_monthly,
         salary_growth_monthly=salary_growth_monthly,
     )
     # Tassazione corretta: contributi tassati 9-15%, rendimenti già netti.
@@ -300,13 +317,17 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         taxable_contribs * (1 - fonte_tax_rate_calculated)
         + max(fonte_pot_at_unlock - taxable_contribs, 0.0)
     )
+    fonte_future_contribs = max(fonte_contribs_at_unlock - cfg["fonte_contributions_paid"], 0.0)
 
     # Proiezione INPS fino ad accesso pensione
-    inps_montante = _project_inps_montante(
+    inps_montante, inps_years_at_access = _project_inps_montante(
         start_montante=cfg["inps_montante_current"],
+        start_contributed_years=cfg["inps_years_contributed_current"],
         age_now=age_now,
         target_age=cfg["pension_access_age"],
         planned_retirement_age=cfg["planned_retirement_age"],
+        pension_access_age=int(cfg["pension_access_age"]),
+        fill_missing_years_after_fire=bool(cfg.get("inps_fill_missing_years", False)),
         cfg=cfg,
         inps_contrib_growth_monthly=inps_contrib_growth_monthly,
     )
@@ -314,12 +335,17 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         float(cfg["pension_access_age"]),
         future_haircut=cfg["inps_coefficient_haircut"],
     )
-    inps_annual_lorda = inps_montante * inps_coeff
-    inps_monthly_netta = annual_net_pension_from_gross(
-        inps_annual_lorda,
-        regional_surtax=cfg["regional_surtax"],
-        municipal_surtax=cfg["municipal_surtax"],
-    ) / 12
+    inps_annual_lorda = 0.0
+    inps_monthly_netta = 0.0
+    inps_eligible = inps_years_at_access >= 20.0
+    if inps_eligible:
+        inps_annual_lorda = inps_montante * inps_coeff
+        inps_annual_lorda *= cfg.get("inps_gross_factor", 1.0)
+        inps_monthly_netta = annual_net_pension_from_gross(
+            inps_annual_lorda,
+            regional_surtax=cfg["regional_surtax"],
+            municipal_surtax=cfg["municipal_surtax"],
+        ) / 12
 
     inheritance_cash_real_at_unlock = inheritance_cash_real_at_inh
 
@@ -336,6 +362,8 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             "Note": (
                 f"Pot lordo €{fonte_pot_at_unlock:,.0f}, contributi cumulati "
                 f"€{fonte_contribs_at_unlock:,.0f} tassati al {fonte_tax_rate_calculated*100:.2f}%; "
+                f"contributi aggiuntivi futuri €{fonte_future_contribs:,.0f} fino a FIRE "
+                f"({cfg['planned_retirement_age']:.2f} anni), poi sola rivalutazione fino allo sblocco; "
                 "rendimenti già netti (sostitutiva 20%/12,5%)."
             ),
         },
@@ -356,8 +384,16 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             "Età sblocco": f"{cfg['pension_access_age']:.0f}",
             "Valore stimato": inps_monthly_netta,
             "Note": (
-                f"Coeff. INPS {inps_coeff * 100:.3f}% (haircut {cfg['inps_coefficient_haircut']*100:.0f}%) + "
-                "IRPEF a scaglioni + detrazione pensione + addizionali."
+                (
+                    f"Anni contributivi stimati: {inps_years_at_access:.1f} (>=20, requisito soddisfatto). "
+                    f"Coeff. INPS {inps_coeff * 100:.3f}% (haircut {cfg['inps_coefficient_haircut']*100:.0f}%) + "
+                    "IRPEF a scaglioni + detrazione pensione + addizionali."
+                )
+                if inps_eligible
+                else (
+                    f"Anni contributivi stimati: {inps_years_at_access:.1f} (<20). "
+                    "Pensione INPS non erogabile nel modello con questi parametri."
+                )
             ),
         },
     ])
@@ -365,22 +401,38 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     st.dataframe(future_assets_df, use_container_width=True, hide_index=True)
 
     # ── Metriche FIRE deterministiche ────────────────────────────────────────
-    st.markdown("##### Risultati soglia SWR")
-    cols = st.columns(len(scenarios))
-    for i, (label, _) in enumerate(scenarios.items()):
-        fa = fire_ages[label]
+    st.markdown("##### Età FIRE minima sostenibile per scenario")
+    st.caption(
+        "Definizione: prima età in cui puoi smettere di lavorare e il capitale non va mai a zero "
+        f"fino a {cfg['sim_end']} anni. Confronto rispetto alla tua FIRE impostata ({cfg['planned_retirement_age']:.1f} anni)."
+    )
+    ordered_labels = sorted(
+        scenarios.keys(),
+        key=lambda label: (
+            min_sustainable_fire_ages[label] is None,
+            float("inf") if min_sustainable_fire_ages[label] is None else (
+                min_sustainable_fire_ages[label] - float(cfg["planned_retirement_age"])
+            ),
+        ),
+    )
+    cols = st.columns(len(ordered_labels))
+    for i, label in enumerate(ordered_labels):
+        fa = min_sustainable_fire_ages[label]
         if fa is not None:
             fire_year = BIRTH_DATE.year + int(fa)
-            years_left = fa - age_now
-            det_status = (
-                "nel percorso medio il capitale resta > 0 a fine periodo"
-                if deterministic_success.get(label, False)
-                else "nel percorso medio il capitale si esaurisce"
+            delta_vs_manual = fa - float(cfg["planned_retirement_age"])
+            cols[i].metric(
+                label,
+                f"Età {fa:.1f} ({fire_year})",
+                f"{delta_vs_manual:+.1f} anni vs FIRE impostata",
+                delta_color="inverse",
             )
-            cols[i].metric(label, f"Età {fa:.1f} ({fire_year})", f"tra {years_left:.1f} anni")
-            cols[i].caption(det_status)
+            if delta_vs_manual > 0:
+                cols[i].caption("In questo scenario devi posticipare il FIRE rispetto alla data impostata.")
+            else:
+                cols[i].caption("In questo scenario la data FIRE impostata è sostenibile (o prudente).")
         else:
-            cols[i].metric(label, "Non raggiunto", f"nel range (max {cfg['sim_end']}a)")
+            cols[i].metric(label, "Non sostenibile", f"entro {cfg['sim_end']} anni")
 
     st.divider()
 
@@ -417,13 +469,17 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         planned_retirement_age=cfg["planned_retirement_age"],
         cfg=cfg,
         fonte_monthly=fonte_monthly,
+        fonte_post_fire_monthly=fonte_post_fire_monthly,
         salary_growth_monthly=salary_growth_monthly,
     )
-    inps_montante_at_fire = _project_inps_montante(
+    inps_montante_at_fire, inps_years_at_fire = _project_inps_montante(
         start_montante=cfg["inps_montante_current"],
+        start_contributed_years=cfg["inps_years_contributed_current"],
         age_now=age_now,
         target_age=cfg["planned_retirement_age"],
         planned_retirement_age=cfg["planned_retirement_age"],
+        pension_access_age=int(cfg["pension_access_age"]),
+        fill_missing_years_after_fire=bool(cfg.get("inps_fill_missing_years", False)),
         cfg=cfg,
         inps_contrib_growth_monthly=inps_contrib_growth_monthly,
     )
@@ -467,6 +523,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
                 "pension_value": fonte_pot_at_fire,
                 "fonte_contributions_paid": fonte_contribs_at_fire,
                 "inps_montante_current": inps_montante_at_fire,
+                "inps_years_contributed_current": inps_years_at_fire,
             }
             target_capital_fire, target_prob_fire = required_capital_for_target_survival(
                 target_survival=target_survival,

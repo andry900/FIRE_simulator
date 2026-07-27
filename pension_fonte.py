@@ -140,15 +140,17 @@ def step_fonte(
     m: int,
     age: float,
     monthly_rate: float,
+    monthly_rate_post_fire: float | None = None,
     salary_growth_monthly: float,
     annual_pension_contribution: float,
     planned_retirement_age: float,
-    fonte_access_age: int,
+    fonte_access_age: float,
     fonte_tax_rate: float,
 ) -> tuple[FonteState, float, float]:
     """Avanza lo stato Fon.te di un mese.
 
     monthly_rate è il tasso reale NETTO (post imposta sostitutiva 20%/12,5%).
+    monthly_rate_post_fire, se valorizzato, viene usato dopo FIRE.
 
     I versamenti annui cessano all'età FIRE (planned_retirement_age), non
     all'età di accesso pensione pubblica.
@@ -171,7 +173,8 @@ def step_fonte(
         pot = pot * (1 + monthly_rate) + monthly_contrib
         contributions_paid += monthly_contrib
     else:
-        pot = pot * (1 + monthly_rate)
+        post_fire_rate = monthly_rate if monthly_rate_post_fire is None else monthly_rate_post_fire
+        pot = pot * (1 + post_fire_rate)
 
     if age >= fonte_access_age:
         # In uscita: tassa solo i contributi dedotti, i rendimenti sono già

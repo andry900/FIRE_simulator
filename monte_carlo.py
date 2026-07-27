@@ -69,12 +69,16 @@ def _run_one_mc(
     fonte_monthly: float,
     annual_pension_contribution: float,
     planned_retirement_age: float,
-    fonte_access_age: int,
+    fonte_access_age: float,
+    fonte_unlock_years_after_fire: float | None,
     fonte_enrollment_date: str,
     inps_montante_current: float,
     inps_montante_revaluation_rate: float,
     inps_contrib_growth_monthly: float,
     inps_annual_contribution: float,
+    inps_years_contributed_current: float,
+    inps_fill_missing_years: bool,
+    inps_gross_factor: float,
     pension_access_age: int,
     inps_coefficient_haircut: float,
     housing_mode: str,
@@ -95,12 +99,21 @@ def _run_one_mc(
     rng: np.random.Generator,
 ) -> bool:
     """Esegue una singola simulazione Monte Carlo."""
+    fonte_post_fire_real_monthly = (1 / (1 + inflation_monthly)) - 1
     fonte_tax_rate = fonte_tax_rate_by_enrollment(
         fonte_enrollment_date, float(fonte_access_age), start_age
     )
+    effective_fonte_access_age = (
+        float(planned_retirement_age) + max(float(fonte_unlock_years_after_fire), 0.0)
+        if fonte_unlock_years_after_fire is not None
+        else float(fonte_access_age)
+    )
 
     fonte = FonteState(pot=pension_value, contributions_paid=fonte_contributions_paid)
-    inps = InpsState(montante=inps_montante_current)
+    inps = InpsState(
+        montante=inps_montante_current,
+        contributed_years=max(float(inps_years_contributed_current), 0.0),
+    )
     inheritance_event_done = False
 
     for m in range(months + 1):
@@ -111,10 +124,11 @@ def _run_one_mc(
             m=m,
             age=age,
             monthly_rate=fonte_monthly,
+            monthly_rate_post_fire=fonte_post_fire_real_monthly,
             salary_growth_monthly=salary_growth_monthly,
             annual_pension_contribution=annual_pension_contribution,
             planned_retirement_age=planned_retirement_age,
-            fonte_access_age=fonte_access_age,
+            fonte_access_age=effective_fonte_access_age,
             fonte_tax_rate=fonte_tax_rate,
         )
         portfolio += delta_p
@@ -129,7 +143,10 @@ def _run_one_mc(
             inps_annual_contribution=inps_annual_contribution,
             planned_retirement_age=planned_retirement_age,
             pension_access_age=pension_access_age,
+            years_contributed_required=20.0,
+            fill_missing_years_after_fire=inps_fill_missing_years,
             coefficient_haircut=inps_coefficient_haircut,
+            gross_pension_factor=inps_gross_factor,
         )
 
         if not inheritance_event_done and age >= inheritance_age:
@@ -221,13 +238,21 @@ def _build_common_kwargs(
         ),
         annual_pension_contribution=float(simulate_kwargs.get("annual_pension_contribution", 8211.0)),
         planned_retirement_age=float(simulate_kwargs["planned_retirement_age"]),
-        fonte_access_age=int(simulate_kwargs.get("fonte_access_age", 50)),
+        fonte_access_age=float(simulate_kwargs.get("fonte_access_age", 50.0)),
+        fonte_unlock_years_after_fire=(
+            None
+            if simulate_kwargs.get("fonte_unlock_years_after_fire") is None
+            else float(simulate_kwargs.get("fonte_unlock_years_after_fire"))
+        ),
         fonte_enrollment_date=str(simulate_kwargs.get("fonte_enrollment_date", "2021-04-01")),
         inps_montante_current=float(simulate_kwargs.get("inps_montante_current", 102456.0)),
         inps_montante_revaluation_rate=float(
             simulate_kwargs.get("inps_montante_revaluation_rate", 0.015)
         ),
         inps_annual_contribution=float(simulate_kwargs.get("inps_annual_contribution", 18023.0)),
+        inps_years_contributed_current=float(simulate_kwargs.get("inps_years_contributed_current", 10.0)),
+        inps_fill_missing_years=bool(simulate_kwargs.get("inps_fill_missing_years", False)),
+        inps_gross_factor=float(simulate_kwargs.get("inps_gross_factor", 1.0)),
         pension_access_age=int(simulate_kwargs["pension_access_age"]),
         inps_coefficient_haircut=float(simulate_kwargs.get("inps_coefficient_haircut", 0.0)),
         housing_mode=str(simulate_kwargs["housing_mode"]),
