@@ -45,6 +45,7 @@ def init_db() -> None:
             inheritance_cash_amount REAL DEFAULT 250000,
             real_estate_appreciation REAL DEFAULT 0.015,
             post_fire_expense_multiplier REAL DEFAULT 1.5,
+            minimum_portfolio_reserve REAL DEFAULT 100000,
             planned_retirement_age REAL DEFAULT 44.17,
             annual_volatility      REAL    DEFAULT 0.14,
             crash_prob_annual      REAL    DEFAULT 0.10,
@@ -170,6 +171,7 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
         ("inheritance_cash_amount",      "REAL DEFAULT 250000"),
         ("real_estate_appreciation",     "REAL DEFAULT 0.015"),
         ("post_fire_expense_multiplier", "REAL DEFAULT 1.5"),
+        ("minimum_portfolio_reserve",   "REAL DEFAULT 100000"),
         ("planned_retirement_age",       "REAL DEFAULT 44"),
         ("annual_volatility",            "REAL DEFAULT 0.14"),
         ("crash_prob_annual",            "REAL DEFAULT 0.10"),
@@ -214,6 +216,9 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "UPDATE simulation_params SET planned_retirement_age = 44.17 WHERE id = 1 AND planned_retirement_age = 44"
+    )
+    conn.execute(
+        "UPDATE simulation_params SET minimum_portfolio_reserve = 100000 WHERE minimum_portfolio_reserve IS NULL"
     )
 
 
@@ -333,6 +338,7 @@ def save_params(params: dict) -> None:
                    inheritance_age=:inheritance_age,
                    real_estate_appreciation=:real_estate_appreciation,
                    post_fire_expense_multiplier=:post_fire_expense_multiplier,
+                   minimum_portfolio_reserve=:minimum_portfolio_reserve,
                    planned_retirement_age=:planned_retirement_age,
                    annual_volatility=:annual_volatility,
                    crash_prob_annual=:crash_prob_annual,

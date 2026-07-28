@@ -64,6 +64,7 @@ def simulate(
     stamp_duty_rate: float = 0.002,
     regional_surtax: float = DEFAULT_REGIONAL_SURTAX,
     municipal_surtax: float = DEFAULT_MUNICIPAL_SURTAX,
+    minimum_portfolio_reserve: float = 100000.0,
 ) -> tuple[pd.DataFrame, bool]:
     """Proietta il patrimonio in euro reali (inflazione rimossa).
 
@@ -241,7 +242,9 @@ def simulate(
             # Accumulo end-of-month: stipendio non rende quel mese (ok).
             portfolio = portfolio * (1 + real_monthly) + cashflow_t
 
-        if retired and portfolio < fire_number_t:
+        reserve_floor = max(0.0, float(minimum_portfolio_reserve or 100000.0))
+        if retired and portfolio <= reserve_floor:
+            portfolio = max(portfolio, 0.0)
             success = False
 
     return (
@@ -258,7 +261,8 @@ def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
     def is_display_sustainable(planned_age: float) -> bool:
         local_kwargs = {**simulate_kwargs, "planned_retirement_age": planned_age}
         df_path, ok = simulate(**local_kwargs)
-        return ok and not ((df_path["portfolio"] < df_path["fire_number"]) & (df_path["age"] >= planned_age)).any()
+        reserve_floor = max(0.0, float(simulate_kwargs.get("minimum_portfolio_reserve") or 100000.0))
+        return ok and not ((df_path["portfolio"] <= reserve_floor) & (df_path["age"] >= planned_age)).any()
 
     if is_display_sustainable(start_age):
         return start_age

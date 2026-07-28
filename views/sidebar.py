@@ -105,6 +105,17 @@ def render() -> dict:
             st.caption(
                 f"Dopo il pensionamento: spese x{post_fire_expense_multiplier:.2f} (fisso in termini reali)."
             )
+            minimum_portfolio_reserve = st.number_input(
+                "Patrimonio minimo da mantenere (€ di oggi)",
+                value=float(p.get("minimum_portfolio_reserve") or 100000.0),
+                step=5000.0,
+                min_value=0.0,
+                format="%.0f",
+                help="Nel modello i valori sono in euro reali, quindi questo importo è già adattato all'inflazione.",
+            )
+            st.caption(
+                f"Soglia di sicurezza: €{minimum_portfolio_reserve:,.0f} in euro di oggi."
+            )
 
         # ── Simulazione ──────────────────────────────────────────────────────
         with st.expander("🏖️ Simulazione", expanded=False):
@@ -425,6 +436,7 @@ def render() -> dict:
                 "inheritance_age":               int(inheritance_age),
                 "real_estate_appreciation":      real_estate_appreciation,
                 "post_fire_expense_multiplier":  post_fire_expense_multiplier,
+                "minimum_portfolio_reserve":     minimum_portfolio_reserve,
                 "planned_retirement_age":        planned_retirement_age,
                 "annual_volatility":             annual_volatility,
                 "crash_prob_annual":             crash_prob_annual,
@@ -499,5 +511,6 @@ def render() -> dict:
         crash_prob_annual=crash_prob_annual,
         crash_impact=crash_impact,
         monte_carlo_runs=monte_carlo_runs,
+        minimum_portfolio_reserve=minimum_portfolio_reserve,
         age_now=age_now,
     )

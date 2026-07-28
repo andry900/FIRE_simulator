@@ -143,6 +143,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     st.divider()
 
     threshold_swr = DETERMINISTIC_SWR
+    minimum_portfolio_reserve = float(cfg.get("minimum_portfolio_reserve") or 100000.0)
 
     # ── Costruzione kwargs comuni ────────────────────────────────────────────
     base_sim_kwargs = dict(
@@ -157,6 +158,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
         owner_cost_real_growth=cfg["owner_cost_real_growth"],
         inflation=cfg["inflation"],
         threshold_swr=threshold_swr,
+        minimum_portfolio_reserve=minimum_portfolio_reserve,
         pension_value=pension_total,
         pension_access_age=cfg["pension_access_age"],
         annual_pension_contribution=cfg["annual_pension_contribution"],
@@ -393,8 +395,8 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     # ── Metriche FIRE deterministiche ────────────────────────────────────────
     st.markdown("##### Età FIRE minima sostenibile per scenario")
     st.caption(
-        "Definizione: prima età in cui puoi smettere di lavorare e il capitale resta sempre sopra "
-        f"il FIRE number dinamico fino a {cfg['sim_end']} anni. Confronto rispetto alla tua FIRE impostata ({cfg['planned_retirement_age']:.1f} anni)."
+        "Definizione: prima età in cui puoi smettere di lavorare e il capitale non va mai a zero "
+        f"fino a {cfg['sim_end']} anni. Confronto rispetto alla tua FIRE impostata ({cfg['planned_retirement_age']:.1f} anni)."
     )
     ordered_labels = sorted(
         scenarios.keys(),
@@ -538,6 +540,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
 
     mc_signature = (
         round(threshold_swr, 6),
+        float(cfg.get("minimum_portfolio_reserve", 100000.0)),
         int(cfg["monte_carlo_runs"]),
         float(cfg["annual_volatility"]),
         float(cfg["crash_prob_annual"]),

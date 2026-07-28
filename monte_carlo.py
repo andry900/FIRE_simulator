@@ -94,6 +94,7 @@ def _run_one_mc(
     capital_gains_rate: float,
     regional_surtax: float,
     municipal_surtax: float,
+    minimum_portfolio_reserve: float,
     start_age: float,
     months: int,
     rng: np.random.Generator,
@@ -206,7 +207,8 @@ def _run_one_mc(
         else:
             portfolio = portfolio * (1 + random_r) + cashflow_t
 
-        if retired and portfolio <= 0:
+        reserve_floor = max(0.0, float(minimum_portfolio_reserve or 0.0))
+        if retired and portfolio <= reserve_floor:
             return False
 
     return True
@@ -264,6 +266,7 @@ def _build_common_kwargs(
         capital_gains_rate=capital_gains_rate,
         regional_surtax=float(simulate_kwargs.get("regional_surtax", DEFAULT_REGIONAL_SURTAX)),
         municipal_surtax=float(simulate_kwargs.get("municipal_surtax", DEFAULT_MUNICIPAL_SURTAX)),
+        minimum_portfolio_reserve=float(simulate_kwargs.get("minimum_portfolio_reserve") or 100000.0),
         start_age=start_age,
         months=months,
         **rates,
