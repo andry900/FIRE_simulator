@@ -431,19 +431,20 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     )
 
     fig_min_fire = go.Figure()
+    fonte_unlock_lag = max(float(cfg["fonte_access_age"]) - float(cfg["planned_retirement_age"]), 0.0)
     for label in ordered_labels:
         ret, color, dash, housing_mode, default_visible = scenarios[label]
         scenario_fire_age = min_sustainable_fire_ages[label]
         if scenario_fire_age is None:
             continue
-        scenario_fonte_age = float(cfg["fonte_access_age"])
+        scenario_fonte_age = scenario_fire_age + fonte_unlock_lag
 
         sim_kwargs = {
             **base_sim_kwargs,
             "nominal_return": ret,
             "housing_mode": housing_mode,
             "planned_retirement_age": scenario_fire_age,
-            "fonte_unlock_years_after_fire": max(float(cfg["fonte_access_age"]) - scenario_fire_age, 0.0),
+            "fonte_unlock_years_after_fire": fonte_unlock_lag,
         }
         df_min_fire, _ = simulate(**sim_kwargs)
 

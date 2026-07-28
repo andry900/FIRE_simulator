@@ -254,12 +254,9 @@ def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
     """Trova l'età FIRE minima sostenibile tramite binary search."""
     start_age = float(simulate_kwargs["start_age"])
     end_age = int(simulate_kwargs["end_age"])
-    fonte_access_age = simulate_kwargs.get("fonte_access_age")
 
     def is_display_sustainable(planned_age: float) -> bool:
         local_kwargs = {**simulate_kwargs, "planned_retirement_age": planned_age}
-        if fonte_access_age is not None:
-            local_kwargs["fonte_unlock_years_after_fire"] = max(float(fonte_access_age) - planned_age, 0.0)
         df_path, ok = simulate(**local_kwargs)
         return ok and not ((df_path["portfolio"] < df_path["fire_number"]) & (df_path["age"] >= planned_age)).any()
 
