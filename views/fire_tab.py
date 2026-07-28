@@ -393,8 +393,8 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     # ── Metriche FIRE deterministiche ────────────────────────────────────────
     st.markdown("##### Età FIRE minima sostenibile per scenario")
     st.caption(
-        "Definizione: prima età in cui puoi smettere di lavorare e il capitale non va mai a zero "
-        f"fino a {cfg['sim_end']} anni. Confronto rispetto alla tua FIRE impostata ({cfg['planned_retirement_age']:.1f} anni)."
+        "Definizione: prima età in cui puoi smettere di lavorare e il capitale resta sempre sopra "
+        f"il FIRE number dinamico fino a {cfg['sim_end']} anni. Confronto rispetto alla tua FIRE impostata ({cfg['planned_retirement_age']:.1f} anni)."
     )
     ordered_labels = sorted(
         scenarios.keys(),
@@ -431,19 +431,19 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     )
 
     fig_min_fire = go.Figure()
-    fonte_unlock_lag = max(float(cfg["fonte_access_age"]) - float(cfg["planned_retirement_age"]), 0.0)
     for label in ordered_labels:
         ret, color, dash, housing_mode, default_visible = scenarios[label]
         scenario_fire_age = min_sustainable_fire_ages[label]
         if scenario_fire_age is None:
             continue
-        scenario_fonte_age = scenario_fire_age + fonte_unlock_lag
+        scenario_fonte_age = float(cfg["fonte_access_age"])
 
         sim_kwargs = {
             **base_sim_kwargs,
             "nominal_return": ret,
             "housing_mode": housing_mode,
             "planned_retirement_age": scenario_fire_age,
+            "fonte_unlock_years_after_fire": max(float(cfg["fonte_access_age"]) - scenario_fire_age, 0.0),
         }
         df_min_fire, _ = simulate(**sim_kwargs)
 

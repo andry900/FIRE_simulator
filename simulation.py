@@ -193,9 +193,9 @@ def simulate(
             net_for_fire = annual_expenses_post
         fire_number_t = net_for_fire / threshold_swr
 
-        ages.append(round(age, 4))
-        values.append(round(portfolio, 2))
-        fire_nums.append(round(fire_number_t, 2))
+        ages.append(age)
+        values.append(portfolio)
+        fire_nums.append(fire_number_t)
 
         # ── Cash flow mensile ────────────────────────────────────────────────
         retired = age >= planned_retirement_age
@@ -241,8 +241,7 @@ def simulate(
             # Accumulo end-of-month: stipendio non rende quel mese (ok).
             portfolio = portfolio * (1 + real_monthly) + cashflow_t
 
-        if retired and portfolio <= 0:
-            portfolio = 0
+        if retired and portfolio < fire_number_t:
             success = False
 
     return (
@@ -255,10 +254,14 @@ def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
     """Trova l'età FIRE minima sostenibile tramite binary search."""
     start_age = float(simulate_kwargs["start_age"])
     end_age = int(simulate_kwargs["end_age"])
+    fonte_access_age = simulate_kwargs.get("fonte_access_age")
 
     def is_display_sustainable(planned_age: float) -> bool:
-        df_path, ok = simulate(**{**simulate_kwargs, "planned_retirement_age": planned_age})
-        return ok and not (df_path["portfolio"] <= 0).any()
+        local_kwargs = {**simulate_kwargs, "planned_retirement_age": planned_age}
+        if fonte_access_age is not None:
+            local_kwargs["fonte_unlock_years_after_fire"] = max(float(fonte_access_age) - planned_age, 0.0)
+        df_path, ok = simulate(**local_kwargs)
+        return ok and not ((df_path["portfolio"] < df_path["fire_number"]) & (df_path["age"] >= planned_age)).any()
 
     if is_display_sustainable(start_age):
         return start_age
@@ -274,4 +277,9 @@ def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
         else:
             lo = mid
 
-    return round(hi, 1)
+    candidate = round(hi, 1)
+    step = precision if precision > 0 else 0.1
+    while candidate <= float(end_age) and not is_display_sustainable(candidate):
+        candidate = round(candidate + step, 10)
+
+    return candidate
