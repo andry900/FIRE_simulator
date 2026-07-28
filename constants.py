@@ -4,7 +4,7 @@ from datetime import date
 import os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "fire.db")
-BIRTH_DATE = date(1994, 8, 26)
+BIRTH_DATE = date(1990, 1, 1)
 DETERMINISTIC_SWR = 0.025
 
 # ── Tassazione italiana sui prelievi dal portafoglio ──────────────────────────
@@ -25,7 +25,7 @@ DEFAULT_REGIONAL_SURTAX = 0.0173
 # Aliquota addizionale comunale tipica (range 0%–0,9%).
 DEFAULT_MUNICIPAL_SURTAX = 0.008
 
-# ── Tassazione del fondo pensione complementare (Fon.te) ──────────────────────
+# ── Tassazione del fondo pensione complementare ──────────────────────────────
 # Imposta sostitutiva sui rendimenti maturati DENTRO al fondo pensione.
 # 20% standard; 12,5% sulla quota investita in titoli di Stato/white list.
 FONTE_INTERNAL_TAX_BONDS = 0.125

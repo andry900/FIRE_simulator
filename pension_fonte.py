@@ -1,5 +1,5 @@
 """
-Logica del fondo pensione complementare Fon.te.
+Logica del fondo pensione complementare.
 
 Modello fiscale (D.Lgs. 252/2005):
 
@@ -37,7 +37,7 @@ DEFAULT_FONTE_BOND_WEIGHT: float = 0.40
 
 
 def fonte_tax_rate_by_enrollment(enrollment_date: str, unlock_age: float, current_age: float) -> float:
-    """Aliquota Fon.te in uscita in base agli anni di iscrizione (interi).
+    """Aliquota fondo pensione in uscita in base agli anni di iscrizione (interi).
 
     Regole D.Lgs. 252/2005:
     - Dal 1° al 15° anno: 15%
@@ -79,7 +79,7 @@ def fonte_nominal_annual(
     fonte_equity_weight: float,
     fonte_bond_weight: float,
 ) -> float:
-    """Rendimento nominale annuo LORDO del fondo Fon.te con pesi normalizzati."""
+    """Rendimento nominale annuo LORDO del fondo pensione complementare con pesi normalizzati."""
     total_weight = fonte_equity_weight + fonte_bond_weight
     if total_weight <= 0:
         return (
@@ -116,7 +116,7 @@ def fonte_real_monthly(
     fonte_equity_weight: float = DEFAULT_FONTE_EQUITY_WEIGHT,
     fonte_bond_weight: float = DEFAULT_FONTE_BOND_WEIGHT,
 ) -> float:
-    """Tasso reale mensile NETTO del fondo Fon.te.
+    """Tasso reale mensile NETTO del fondo pensione.
 
     Applica l'imposta sostitutiva sui rendimenti (20% / 12,5%) prima di
     detrarre l'inflazione. In questo modo il pot del fondo è già al netto
@@ -147,7 +147,7 @@ def step_fonte(
     fonte_access_age: float,
     fonte_tax_rate: float,
 ) -> tuple[FonteState, float, float]:
-    """Avanza lo stato Fon.te di un mese.
+    """Avanza lo stato del fondo pensione di un mese.
 
     monthly_rate è il tasso reale NETTO (post imposta sostitutiva 20%/12,5%).
     monthly_rate_post_fire, se valorizzato, viene usato dopo FIRE.

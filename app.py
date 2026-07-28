@@ -5,7 +5,7 @@ La logica è distribuita in moduli separati:
   constants.py        — costanti e current_age()
   db.py               — database, CRUD, query
   portfolio.py        — stima rendimenti portafoglio
-  pension_fonte.py    — logica fondo Fon.te
+  pension_fonte.py    — logica fondo pensione complementare
   pension_inps.py     — logica INPS contributivo
   simulation.py       — simulate() e find_fire_age()
   monte_carlo.py      — simulazioni Monte Carlo

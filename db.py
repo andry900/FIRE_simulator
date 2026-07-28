@@ -30,8 +30,8 @@ def init_db() -> None:
 
         CREATE TABLE IF NOT EXISTS simulation_params (
             id                    INTEGER PRIMARY KEY DEFAULT 1,
-            monthly_salary        REAL    DEFAULT 3300,
-            monthly_expenses      REAL    DEFAULT 1550,
+            monthly_salary        REAL    DEFAULT 3000,
+            monthly_expenses      REAL    DEFAULT 1500,
             salary_growth_rate    REAL    DEFAULT 0.03,
             nominal_annual_return REAL    DEFAULT 0.07,
             inflation_rate        REAL    DEFAULT 0.025,
@@ -46,21 +46,21 @@ def init_db() -> None:
             real_estate_appreciation REAL DEFAULT 0.015,
             post_fire_expense_multiplier REAL DEFAULT 1.5,
             minimum_portfolio_reserve REAL DEFAULT 100000,
-            planned_retirement_age REAL DEFAULT 44.17,
+            planned_retirement_age REAL DEFAULT 45.0,
             annual_volatility      REAL    DEFAULT 0.14,
             crash_prob_annual      REAL    DEFAULT 0.10,
             crash_impact           REAL    DEFAULT -0.20,
             monte_carlo_runs       INTEGER DEFAULT 800,
-            annual_pension_contribution      REAL    DEFAULT 8211,
-            fonte_enrollment_date            TEXT    DEFAULT '2021-04-01',
+            annual_pension_contribution      REAL    DEFAULT 3000,
+            fonte_enrollment_date            TEXT    DEFAULT '2020-01-01',
             fonte_access_age                 INTEGER DEFAULT 50,
             fonte_equity_weight              REAL    DEFAULT 0.60,
             fonte_bond_weight                REAL    DEFAULT 0.40,
-            inps_montante_current            REAL    DEFAULT 102456.35,
-            inps_annual_contribution         REAL    DEFAULT 18023,
+            inps_montante_current            REAL    DEFAULT 50000,
+            inps_annual_contribution         REAL    DEFAULT 10000,
             inps_contribution_growth_rate    REAL    DEFAULT 0.025,
             inps_montante_revaluation_rate   REAL    DEFAULT 0.015,
-            inps_contribution_start_date     TEXT    DEFAULT '2018-10-01',
+            inps_contribution_start_date     TEXT    DEFAULT '2015-01-01',
             use_auto_inps_years              INTEGER DEFAULT 1,
             inps_years_contributed_current   REAL    DEFAULT 10.0,
             inps_fill_missing_years          INTEGER DEFAULT 0,
@@ -100,55 +100,41 @@ def init_db() -> None:
 
 def _seed_assets(conn: sqlite3.Connection) -> None:
     """
-    Dati iniziali dal file NetWorth.csv.
-    Pensione Fon.te (€23 500,04) splittata: 62,7% equity → Azionario ETF,
-    37,3% bond → Obbligazionario.
+    Dati di esempio per un nuovo utente.
+    Fondo Pensione (~€23 500) splittato: 60% equity → Azionario ETF,
+    40% bond → Obbligazionario.
     is_investable=0 per asset bloccati/illiquidi o riservati a emergenza.
     """
     assets = [
         # ── Azionario ETF ────────────────────────────────────────────────────
-        ("iShares Core MSCI World",  "BIT:SWDA",    501,   61_818.39, "Azionario ETF", "Developed Markets", "Directa",      1, None),
-        ("Invesco NASDAQ-100",       "BIT:XNAS",    254,   15_257.78, "Azionario ETF", "Nasdaq",            "Directa",      1, None),
-        ("iShares MSCI EM IMI",      "BIT:EIMI",    357,   17_175.27, "Azionario ETF", "Emerging Markets",  "Directa",      1, None),
-        ("iShares MSCI Small Cap",   "BIT:SMEA",    127,   12_920.98, "Azionario ETF", "Small Cap",         "Directa",      1, None),
-        ("VanEck Defense",           "BIT:DFNS",      0,        0.00, "Azionario ETF", "Thematic",          "Directa",      1, None),
-        ("Fon.te — Quota Azionaria", None,         None,   14_739.58, "Azionario ETF", "Pensione",          "Fon.te",       0, "60% equity del fondo pensione"),
+        ("iShares Core MSCI World",  "BIT:SWDA",   500,  60_000.00, "Azionario ETF", "Developed Markets", "Broker A",       1, None),
+        ("Invesco NASDAQ-100",       "BIT:XNAS",   250,  15_000.00, "Azionario ETF", "Nasdaq",            "Broker A",       1, None),
+        ("iShares MSCI EM IMI",      "BIT:EIMI",   350,  17_000.00, "Azionario ETF", "Emerging Markets",  "Broker A",       1, None),
+        ("iShares MSCI Small Cap",   "BIT:SMEA",   125,  12_500.00, "Azionario ETF", "Small Cap",         "Broker A",       1, None),
+        ("Fondo Pensione — Quota Azionaria", None, None, 14_000.00, "Azionario ETF", "Pensione",          "Fondo Pensione", 0, "60% equity del fondo pensione"),
         # ── Azionario Stocks ─────────────────────────────────────────────────
-        ("SAP SE",    "ETR:SAP",    40.00,  6_008.80, "Azionario Stocks", "SAP",  "Fineco",      1, None),
-        ("SAP SE",    "ETR:SAP",    14.57,  2_188.09, "Azionario Stocks", "SAP",  "Equate Plus", 1, "Piano azionario dipendente"),
-        ("SAP SE",    "ETR:SAP",     1.00,    150.22, "Azionario Stocks", "SAP",  "Directa",     1, None),
-        ("Duolingo",  "NASDAQ:DUOL", 9.00,    823.35, "Azionario Stocks", "Tech", "Directa",     1, None),
-        ("NVIDIA",    "BIT:1NVDA",   0.00,      0.00, "Azionario Stocks", "Tech", "Directa",     1, None),
-        ("Ferrari",   "BIT:RACE",    0.00,      0.00, "Azionario Stocks", "Auto", "Directa",     1, None),
-        ("Meta",      "BIT:1FB",     0.00,      0.00, "Azionario Stocks", "Tech", "Directa",     1, None),
-        ("Netflix",   "BIT:1NFLX",   0.00,      0.00, "Azionario Stocks", "Tech", "Directa",     1, None),
+        ("Azione Esempio",  "BIT:EXMPL",  40.00, 6_000.00, "Azionario Stocks", "Large Cap", "Broker B", 1, None),
+        ("NVIDIA",          "BIT:1NVDA",   0.00,     0.00, "Azionario Stocks", "Tech",      "Broker A", 1, None),
+        ("Meta",            "BIT:1FB",     0.00,     0.00, "Azionario Stocks", "Tech",      "Broker A", 1, None),
         # ── Crypto ───────────────────────────────────────────────────────────
-        ("Bitcoin ETP", "ETF:WBITG", 120.0, 1_867.20, "Crypto", "Bitcoin", "Directa", 1, None),
+        ("Bitcoin ETP", "ETF:WBITG", 100.0, 1_500.00, "Crypto", "Bitcoin", "Broker A", 1, None),
         # ── Obbligazionario ──────────────────────────────────────────────────
-        ("Fon.te — Quota Obbligazionaria", None, None, 8_760.46, "Obbligazionario", "Pensione", "Fon.te", 0, "40% bond del fondo pensione"),
+        ("Fondo Pensione — Quota Obbligazionaria", None, None, 8_500.00, "Obbligazionario", "Pensione", "Fondo Pensione", 0, "40% bond del fondo pensione"),
         # ── Oro ──────────────────────────────────────────────────────────────
-        ("Gold Physical",          "GOLD",     74.0, 6_875.94, "Oro", "Fisico",  "Just Sentimental", 1, "Oro fisico"),
-        ("Xtrackers Physical Gold", "BIT:GBSE",  0.0,     0.00, "Oro", "ETC",     "Directa",          1, None),
-        # ── Collezionismo ────────────────────────────────────────────────────
-        ("Pokemon Cards", None, 23.0, 5_228.73, "Collezionismo", "Cards",   "Privato", 0, "Valore di mercato stimato"),
-        ("Funko Pop",     None, 77.0, 2_630.32, "Collezionismo", "Funko",   "Privato", 0, None),
-        ("Orologi",       None,  2.0,   884.00, "Collezionismo", "Orologi", "Privato", 0, None),
+        ("Xtrackers Physical Gold", "BIT:GBSE", 0.0, 0.00, "Oro", "ETC", "Broker A", 1, None),
         # ── Fondo Emergenza ──────────────────────────────────────────────────
-        ("CA Auto Bank", None, None, 25_000.00, "Fondo Emergenza", "Conto Deposito", "CA Auto Bank", 0, "Fondo emergenza / conto deposito"),
+        ("Conto Deposito", None, None, 15_000.00, "Fondo Emergenza", "Conto Deposito", "Banca A", 0, "Fondo emergenza"),
         # ── Liquidità Investimenti ───────────────────────────────────────────
-        ("Directa — Cash", None, None, 14_202.01, "Liquidità Investimenti", "Conto Trading", "Directa", 1, None),
-        ("Fineco — Cash",  None, None,  5_261.87, "Liquidità Investimenti", "Conto Trading", "Fineco",  1, None),
+        ("Broker A — Cash", None, None, 5_000.00, "Liquidità Investimenti", "Conto Trading", "Broker A", 1, None),
         # ── Liquidità Spese ──────────────────────────────────────────────────
-        ("BBVA",    None, None,    477.34, "Liquidità Spese", "Conto Corrente", "BBVA",        1, None),
-        ("ING",     None, None, 20_436.68, "Liquidità Spese", "Conto Corrente", "ING",         1, None),
-        ("Cash",    None, None,    787.64, "Liquidità Spese", "Contante",       "Portafoglio", 1, None),
-        ("Revolut", None, None,      0.00, "Liquidità Spese", "Conto Corrente", "Revolut",     1, None),
+        ("Conto Corrente", None, None, 5_000.00, "Liquidità Spese", "Conto Corrente", "Banca A",     1, None),
+        ("Cash",           None, None,   500.00, "Liquidità Spese", "Contante",       "Portafoglio", 1, None),
         # ── Liquidità Bloccata ───────────────────────────────────────────────
         ("Caparra Affitto", None, None, 900.00, "Liquidità Bloccata", "Deposito Cauzionale", "Privato", 0, "Cauzione affitto bloccata"),
         # ── Immobiliare ──────────────────────────────────────────────────────
-        ("Cash Eredità",       None, None, 250_000.00, "Immobiliare", "Cash",         "Eredità", 0, "Cash eredità stimata, valore reale di oggi"),
-        ("Casa Roma",          None,  1.0, 300_000.00, "Immobiliare", "Abitazione",   "Eredità", 0, "Valore attuale stimato"),
-        ("Casa al Mare (50%)", None,  0.5, 100_000.00, "Immobiliare", "Seconda Casa", "Eredità", 0, "50% di immobile da €200.000"),
+        ("Cash Eredità",       None, None, 100_000.00, "Immobiliare", "Cash",         "Eredità", 0, "Cash eredità stimata, valore reale di oggi"),
+        ("Casa Principale",    None,  1.0, 250_000.00, "Immobiliare", "Abitazione",   "Eredità", 0, "Valore attuale stimato"),
+        ("Seconda Casa (50%)", None,  0.5,  75_000.00, "Immobiliare", "Seconda Casa", "Eredità", 0, "50% di immobile da €150.000"),
     ]
     conn.executemany(
         """INSERT INTO assets
@@ -172,21 +158,21 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
         ("real_estate_appreciation",     "REAL DEFAULT 0.015"),
         ("post_fire_expense_multiplier", "REAL DEFAULT 1.5"),
         ("minimum_portfolio_reserve",   "REAL DEFAULT 100000"),
-        ("planned_retirement_age",       "REAL DEFAULT 44"),
+        ("planned_retirement_age",       "REAL DEFAULT 45"),
         ("annual_volatility",            "REAL DEFAULT 0.14"),
         ("crash_prob_annual",            "REAL DEFAULT 0.10"),
         ("crash_impact",                 "REAL DEFAULT -0.20"),
         ("monte_carlo_runs",             "INTEGER DEFAULT 800"),
-        ("annual_pension_contribution",  "REAL DEFAULT 8211"),
-        ("fonte_enrollment_date",        "TEXT DEFAULT '2005-01-01'"),
+        ("annual_pension_contribution",  "REAL DEFAULT 3000"),
+        ("fonte_enrollment_date",        "TEXT DEFAULT '2020-01-01'"),
         ("fonte_access_age",             "INTEGER DEFAULT 50"),
         ("fonte_equity_weight",          "REAL DEFAULT 0.60"),
         ("fonte_bond_weight",            "REAL DEFAULT 0.40"),
-        ("inps_montante_current",        "REAL DEFAULT 102456.35"),
-        ("inps_annual_contribution",     "REAL DEFAULT 18023"),
+        ("inps_montante_current",        "REAL DEFAULT 50000"),
+        ("inps_annual_contribution",     "REAL DEFAULT 10000"),
         ("inps_contribution_growth_rate","REAL DEFAULT 0.025"),
         ("inps_montante_revaluation_rate","REAL DEFAULT 0.015"),
-        ("inps_contribution_start_date", "TEXT DEFAULT '2018-10-01'"),
+        ("inps_contribution_start_date", "TEXT DEFAULT '2015-01-01'"),
         ("use_auto_inps_years",          "INTEGER DEFAULT 1"),
         ("inps_years_contributed_current","REAL DEFAULT 10.0"),
         ("inps_fill_missing_years",      "INTEGER DEFAULT 0"),
@@ -210,13 +196,7 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE simulation_params SET pension_access_age = 73 WHERE id = 1 AND pension_access_age = 67"
     )
-    # Migrazione default pensionamento: 45 → 44 → 44.17
-    conn.execute(
-        "UPDATE simulation_params SET planned_retirement_age = 44 WHERE id = 1 AND planned_retirement_age = 45"
-    )
-    conn.execute(
-        "UPDATE simulation_params SET planned_retirement_age = 44.17 WHERE id = 1 AND planned_retirement_age = 44"
-    )
+
     conn.execute(
         "UPDATE simulation_params SET minimum_portfolio_reserve = 100000 WHERE minimum_portfolio_reserve IS NULL"
     )
@@ -266,9 +246,9 @@ def _drop_legacy_fonte_return_columns(conn: sqlite3.Connection) -> None:
 def _ensure_real_estate_assets(conn: sqlite3.Connection) -> None:
     """Aggiunge gli asset immobiliari se non presenti (migrazione non distruttiva)."""
     real_estate_assets = [
-        ("Cash Eredità",       None, None, 250_000.00, "Immobiliare", "Cash",         "Eredità", 0, "Cash eredità stimata, valore reale di oggi"),
-        ("Casa Roma",          None,  1.0, 300_000.00, "Immobiliare", "Abitazione",   "Eredità", 0, "Valore attuale stimato"),
-        ("Casa al Mare (50%)", None,  0.5, 100_000.00, "Immobiliare", "Seconda Casa", "Eredità", 0, "50% di immobile da €200.000"),
+        ("Cash Eredità",       None, None, 100_000.00, "Immobiliare", "Cash",         "Eredità", 0, "Cash eredità stimata, valore reale di oggi"),
+        ("Casa Principale",    None,  1.0, 250_000.00, "Immobiliare", "Abitazione",   "Eredità", 0, "Valore attuale stimato"),
+        ("Seconda Casa (50%)", None,  0.5,  75_000.00, "Immobiliare", "Seconda Casa", "Eredità", 0, "50% di immobile da €150.000"),
     ]
     for asset in real_estate_assets:
         name = asset[0]

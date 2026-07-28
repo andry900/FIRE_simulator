@@ -41,17 +41,17 @@ def simulate(
     real_estate_appreciation: float,
     start_age: float,
     end_age: int,
-    annual_pension_contribution: float = 8211.0,
+    annual_pension_contribution: float = 3000.0,
     fonte_access_age: float = 50.0,
     fonte_unlock_years_after_fire: float | None = None,
-    fonte_enrollment_date: str = "2021-04-01",
+    fonte_enrollment_date: str = "2020-01-01",
     fonte_equity_return: float = 0.075,
     fonte_bond_return: float = 0.035,
     fonte_equity_weight: float = 0.60,
     fonte_bond_weight: float = 0.40,
     fonte_contributions_paid: float = 0.0,
-    inps_montante_current: float = 102456.0,
-    inps_annual_contribution: float = 18023.0,
+    inps_montante_current: float = 50000.0,
+    inps_annual_contribution: float = 10000.0,
     inps_contribution_growth_rate: float = 0.03,
     inps_montante_revaluation_rate: float = 0.015,
     inps_years_contributed_current: float = 10.0,
@@ -74,7 +74,7 @@ def simulate(
       (gain_ratio dinamico).
     - Drag annuo: TER ETF + bollo titoli sottratti dal rendimento.
     - INPS: rivalutazione annuale, addizionali regionale/comunale incluse.
-    - Fon.te: rendimento netto post imposta sostitutiva 20%/12,5%; in uscita
+    - Fondo Pensione: rendimento netto post imposta sostitutiva 20%/12,5%; in uscita
       tassati solo i contributi (9-15%).
 
     Restituisce (DataFrame mensile, successo_a_fine_periodo).
@@ -127,7 +127,7 @@ def simulate(
     for m in range(months + 1):
         age = start_age + m / 12
 
-        # ── Fon.te ──────────────────────────────────────────────────────────
+        # ── Fondo Pensione ───────────────────────────────────────────────────
         fonte, delta_p, delta_cb = step_fonte(
             fonte,
             m=m, age=age,

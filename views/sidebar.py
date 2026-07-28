@@ -144,24 +144,24 @@ def render() -> dict:
                 "L'haircut riduce i coefficienti per simulare ulteriori revisioni triennali sfavorevoli."
             )
 
-        # ── Fon.te ───────────────────────────────────────────────────────────
-        with st.expander("🟠 Fon.te", expanded=False):
+        # ── Fondo Pensione ─────────────────────────────────────────────────────
+        with st.expander("🟠 Fondo Pensione", expanded=False):
             annual_pension_contribution = st.number_input(
-                "Versamento annuo Fon.te (€/anno)",
-                value=float(p.get("annual_pension_contribution", 8211.0)),
+                "Versamento annuo Fondo Pensione (€/anno)",
+                value=float(p.get("annual_pension_contribution", 3000.0)),
                 step=100.0, min_value=0.0, format="%.0f",
             )
             fonte_access_age = st.number_input(
-                "Età sblocco Fon.te", value=float(p.get("fonte_access_age", 50.0)),
+                "Età sblocco Fondo Pensione", value=float(p.get("fonte_access_age", 50.0)),
                 step=0.1, min_value=44.0, max_value=75.0,
             )
-            fonte_enrollment_date_str = p.get("fonte_enrollment_date", "2021-04-01")
+            fonte_enrollment_date_str = p.get("fonte_enrollment_date", "2020-01-01")
             fonte_enrollment_date = st.date_input(
-                "Data inizio iscrizione Fon.te",
+                "Data inizio iscrizione Fondo Pensione",
                 value=pd.to_datetime(fonte_enrollment_date_str).date(),
             )
             fonte_contributions_paid = st.number_input(
-                "Contributi Fon.te già versati cumulativi (€)",
+                "Contributi Fondo Pensione già versati cumulativi (€)",
                 value=float(p.get("fonte_contributions_paid", 0.0)),
                 step=500.0, min_value=0.0, format="%.0f",
                 help="Capitale lordo già versato finora (per la tassazione in uscita: i contributi sono tassati 9-15%, i rendimenti già tassati al 20%/12,5% non sono ulteriormente tassati).",
@@ -172,8 +172,8 @@ def render() -> dict:
                 age_now,
             )
 
-            # Default dinamico: usa lo split reale degli asset Fon.te correnti.
-            fonte_assets = assets_df[assets_df["broker"] == "Fon.te"]
+            # Default dinamico: usa lo split reale degli asset del Fondo Pensione correnti.
+            fonte_assets = assets_df[assets_df["broker"] == "Fondo Pensione"]
             fonte_total = float(fonte_assets["current_value"].sum())
             if fonte_total > 0:
                 fonte_equity_default = float(
@@ -185,18 +185,18 @@ def render() -> dict:
             fonte_equity_return = float(category_return_map.get("Azionario ETF", 0.075))
             fonte_bond_return = float(category_return_map.get("Obbligazionario", 0.035))
             fonte_equity_weight = st.slider(
-                "Peso azionario Fon.te (%)", 0.0, 100.0,
+                "Peso azionario Fondo Pensione (%)", 0.0, 100.0,
                 float(max(0.0, min(1.0, fonte_equity_default)) * 100), 0.5,
             ) / 100
             # Peso obbligazionario vincolato al complemento per evitare incoerenze.
             fonte_bond_weight = max(0.0, 1.0 - fonte_equity_weight)
             st.caption(
-                f"Peso obbligazionario Fon.te calcolato automaticamente: {fonte_bond_weight * 100:.1f}% "
+                f"Peso obbligazionario Fondo Pensione calcolato automaticamente: {fonte_bond_weight * 100:.1f}% "
                 f"(100% - quota azionaria)."
             )
             if fonte_total > 0:
                 st.caption(
-                    f"Default runtime basato sugli asset Fon.te correnti: "
+                    f"Default runtime basato sugli asset Fondo Pensione correnti: "
                     f"{fonte_equity_default * 100:.1f}% azionario / {(1 - fonte_equity_default) * 100:.1f}% obbligazionario."
                 )
             fonte_nominal = fonte_nominal_annual(
@@ -206,7 +206,7 @@ def render() -> dict:
                 fonte_bond_weight,
             )
             st.caption(
-                f"Fon.te: €{annual_pension_contribution:,.0f}/anno (cresce con lo stipendio reale). "
+                f"Fondo Pensione: €{annual_pension_contribution:,.0f}/anno (cresce con lo stipendio reale). "
                 f"Rendimento {fonte_nominal * 100:.2f}% nominale lordo "
                 f"({fonte_equity_weight * 100:.1f}% Az.×{fonte_equity_return * 100:.1f}% + "
                 f"{fonte_bond_weight * 100:.1f}% Obbl.×{fonte_bond_return * 100:.1f}%, pesi normalizzati). "
@@ -219,10 +219,10 @@ def render() -> dict:
             )
             st.caption(
                 f"Aliquota uscita: {fonte_tax_rate * 100:.1f}% (anni di iscrizione: {int(years_from_enrollment)}). "
-                f"I rendimenti Fon.te sono presi dai rendimenti categoria: Azionario ETF e Obbligazionario."
+                f"I rendimenti del Fondo Pensione sono presi dai rendimenti categoria: Azionario ETF e Obbligazionario."
             )
             st.caption(
-                "Nota: il valore Fon.te negli asset rappresenta il montante attuale; "
+                "Nota: il valore Fondo Pensione negli asset rappresenta il montante attuale; "
                 "questi pesi servono solo come ipotesi di allocazione futura per rendimento e fiscalita del fondo."
             )
 
@@ -230,12 +230,12 @@ def render() -> dict:
         with st.expander("🟣 INPS", expanded=False):
             inps_montante_current = st.number_input(
                 "Montante contributivo INPS attuale (€)",
-                value=float(p.get("inps_montante_current", 102456.0)),
+                value=float(p.get("inps_montante_current", 50000.0)),
                 step=1000.0, min_value=0.0, format="%.2f",
             )
             inps_annual_contribution = st.number_input(
                 "Contributo annuo INPS (€/anno, ≤33% RAL)",
-                value=float(p.get("inps_annual_contribution", 18023.0)),
+                value=float(p.get("inps_annual_contribution", 10000.0)),
                 step=500.0, min_value=0.0, format="%.0f",
             )
             inps_contribution_growth_rate = st.slider(
@@ -246,13 +246,13 @@ def render() -> dict:
                 "Rivalutazione montante INPS (%/anno, reale)", 0.0, 4.0,
                 float(p.get("inps_montante_revaluation_rate", 0.015) * 100), 0.1,
             ) / 100
-            inps_contribution_start_date_str = p.get("inps_contribution_start_date", "2018-10-01")
+            inps_contribution_start_date_str = p.get("inps_contribution_start_date", "2015-01-01")
             parsed_start_date = pd.to_datetime(
                 inps_contribution_start_date_str,
                 errors="coerce",
             )
             if pd.isna(parsed_start_date):
-                parsed_start_date = pd.Timestamp("2018-10-01")
+                parsed_start_date = pd.Timestamp("2015-01-01")
             inps_contribution_start_date = st.date_input(
                 "Data inizio versamenti INPS",
                 value=parsed_start_date.date(),

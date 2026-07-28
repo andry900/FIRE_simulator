@@ -239,7 +239,7 @@ def _build_common_kwargs(
             fonte_equity_weight=float(simulate_kwargs.get("fonte_equity_weight", 0.60)),
             fonte_bond_weight=float(simulate_kwargs.get("fonte_bond_weight", 0.40)),
         ),
-        annual_pension_contribution=float(simulate_kwargs.get("annual_pension_contribution", 8211.0)),
+        annual_pension_contribution=float(simulate_kwargs.get("annual_pension_contribution", 3000.0)),
         planned_retirement_age=float(simulate_kwargs["planned_retirement_age"]),
         fonte_access_age=float(simulate_kwargs.get("fonte_access_age", 50.0)),
         fonte_unlock_years_after_fire=(
@@ -247,12 +247,12 @@ def _build_common_kwargs(
             if simulate_kwargs.get("fonte_unlock_years_after_fire") is None
             else float(simulate_kwargs.get("fonte_unlock_years_after_fire"))
         ),
-        fonte_enrollment_date=str(simulate_kwargs.get("fonte_enrollment_date", "2021-04-01")),
-        inps_montante_current=float(simulate_kwargs.get("inps_montante_current", 102456.0)),
+        fonte_enrollment_date=str(simulate_kwargs.get("fonte_enrollment_date", "2020-01-01")),
+        inps_montante_current=float(simulate_kwargs.get("inps_montante_current", 50000.0)),
         inps_montante_revaluation_rate=float(
             simulate_kwargs.get("inps_montante_revaluation_rate", 0.015)
         ),
-        inps_annual_contribution=float(simulate_kwargs.get("inps_annual_contribution", 18023.0)),
+        inps_annual_contribution=float(simulate_kwargs.get("inps_annual_contribution", 10000.0)),
         inps_years_contributed_current=float(simulate_kwargs.get("inps_years_contributed_current", 10.0)),
         inps_fill_missing_years=bool(simulate_kwargs.get("inps_fill_missing_years", False)),
         inps_gross_factor=float(simulate_kwargs.get("inps_gross_factor", 1.0)),

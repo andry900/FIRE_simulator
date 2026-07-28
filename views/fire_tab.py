@@ -24,7 +24,7 @@ def _project_fonte_pot(
     fonte_post_fire_monthly: float,
     salary_growth_monthly: float,
 ) -> tuple[float, float]:
-    """Proietta pot Fon.te e contributi cumulati da age_now a target_age."""
+    """Proietta pot Fondo Pensione e contributi cumulati da age_now a target_age."""
     pot = start_pot
     contributions = start_contributions
     months_to_target = max(int(round((target_age - age_now) * 12)), 0)
@@ -90,7 +90,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     # ── Derivazioni dal portafoglio ──────────────────────────────────────────
     df_current = df[df["category"] != "Immobiliare"].copy()
     portfolio_liquid = df_current[df_current["is_investable"] == 1]["current_value"].sum()
-    pension_total = df_current[df_current["broker"] == "Fon.te"]["current_value"].sum()
+    pension_total = df_current[df_current["broker"] == "Fondo Pensione"]["current_value"].sum()
 
     inheritance_df = df[df["category"] == "Immobiliare"].copy()
     inheritance_cash_amount = (
@@ -120,7 +120,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     # ── Info summary ─────────────────────────────────────────────────────────
     st.markdown(
         f"**Portafoglio investibile attuale:** €{portfolio_liquid:,.0f} "
-        f"· **Fon.te attuale:** €{pension_total:,.0f} (sblocco a {cfg['fonte_access_age']} anni) "
+        f"· **Fondo Pensione attuale:** €{pension_total:,.0f} (sblocco a {cfg['fonte_access_age']} anni) "
         f"· **INPS montante:** €{cfg['inps_montante_current']:,.0f} "
         f"(pensione a {cfg['pension_access_age']} anni) "
         f"· **Eredità:** €{full_house_value_today + partial_house_value_today:,.0f}"
@@ -248,7 +248,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     )
 
     for x_val, color, label_txt in [
-        (cfg["fonte_access_age"], "#FFB74D", f" Fon.te {cfg['fonte_access_age']:.0f}a"),
+        (cfg["fonte_access_age"], "#FFB74D", f" Fondo Pensione {cfg['fonte_access_age']:.0f}a"),
         (cfg["pension_access_age"], "#CE93D8", f" INPS {cfg['pension_access_age']:.0f}a"),
         (inheritance_age, "#8D6E63", f" Eredità {inheritance_age:.0f}a"),
     ]:
@@ -284,14 +284,14 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     )
     inps_contrib_growth_monthly = (1 + cfg["inps_contribution_growth_rate"]) ** (1 / 12) - 1
 
-    # Calcolo aliquota Fon.te dinamica basata su anni di iscrizione
+    # Calcolo aliquota Fondo Pensione dinamica basata su anni di iscrizione
     fonte_tax_rate_calculated = fonte_tax_rate_by_enrollment(
         cfg["fonte_enrollment_date"],
         float(cfg["planned_retirement_age"]),
         age_now,
     )
 
-    # Proiezione Fon.te fino a età di sblocco
+    # Proiezione Fondo Pensione fino a età di sblocco
     fonte_pot_at_unlock, fonte_contribs_at_unlock = _project_fonte_pot(
         start_pot=pension_total,
         start_contributions=cfg["fonte_contributions_paid"],
@@ -348,7 +348,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     st.markdown("##### Asset futuri al momento dello sblocco (valori reali in € di oggi)")
     future_assets_df = pd.DataFrame([
         {
-            "Voce": "Fon.te (netto al primo sblocco)",
+            "Voce": "Fondo Pensione (netto al primo sblocco)",
             "Età sblocco": f"{cfg['fonte_access_age']:.0f}",
             "Valore stimato": fonte_net_at_unlock,
             "Note": (
@@ -491,13 +491,13 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
             legendgroup=label,
             showlegend=False,
             visible=default_visible,
-            hovertemplate=f"Fon.te {scenario_fonte_age:.1f}a<extra>{label}</extra>",
+            hovertemplate=f"Fondo Pensione {scenario_fonte_age:.1f}a<extra>{label}</extra>",
         ))
         fig_min_fire.add_trace(go.Scatter(
             x=[scenario_fonte_age],
             y=[y_max * 0.94 if y_max > 0 else 0.0],
             mode="text",
-            text=[f"Fon.te {scenario_fonte_age:.1f}a"],
+            text=[f"Fondo Pensione {scenario_fonte_age:.1f}a"],
             textposition="top right",
             textfont=dict(color="#FFB74D", size=10),
             legendgroup=label,
