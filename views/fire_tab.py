@@ -56,7 +56,7 @@ def _project_inps_montante(
     montante = start_montante
     contributed_years = max(float(start_contributed_years), 0.0)
     months_to_target = max(int(round((target_age - age_now) * 12)), 0)
-    for m in range(months_to_target + 1):
+    for m in range(months_to_target):
         age_t = age_now + m / 12
         should_contribute = age_t < planned_retirement_age
         if (
@@ -285,7 +285,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     # Calcolo aliquota Fon.te dinamica basata su anni di iscrizione
     fonte_tax_rate_calculated = fonte_tax_rate_by_enrollment(
         cfg["fonte_enrollment_date"],
-        float(cfg["fonte_access_age"]),
+        float(cfg["planned_retirement_age"]),
         age_now,
     )
 

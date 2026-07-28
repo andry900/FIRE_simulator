@@ -6,6 +6,7 @@ Restituisce un dict con tutti i valori selezionati dall'utente.
 import streamlit as st
 
 import pandas as pd
+from datetime import date
 
 from db import load_params, load_assets, save_params, load_category_return_map
 from portfolio import (
@@ -234,12 +235,27 @@ def render() -> dict:
                 "Rivalutazione montante INPS (%/anno, reale)", 0.0, 4.0,
                 float(p.get("inps_montante_revaluation_rate", 0.015) * 100), 0.1,
             ) / 100
-            inps_years_contributed_current = st.number_input(
-                "Anni contributivi INPS maturati oggi",
-                value=float(p.get("inps_years_contributed_current", 10.0)),
-                step=0.5,
-                min_value=0.0,
-                max_value=50.0,
+            inps_contribution_start_date_str = p.get("inps_contribution_start_date", "2018-10-01")
+            parsed_start_date = pd.to_datetime(
+                inps_contribution_start_date_str,
+                errors="coerce",
+            )
+            if pd.isna(parsed_start_date):
+                parsed_start_date = pd.Timestamp("2018-10-01")
+            inps_contribution_start_date = st.date_input(
+                "Data inizio versamenti INPS",
+                value=parsed_start_date.date(),
+            )
+            today = date.today()
+            months_since_start = (
+                (today.year - inps_contribution_start_date.year) * 12
+                + (today.month - inps_contribution_start_date.month)
+                - (1 if today.day < inps_contribution_start_date.day else 0)
+            )
+            auto_years = max(months_since_start / 12, 0.0)
+            inps_years_contributed_current = auto_years
+            st.caption(
+                f"Anni contributivi INPS maturati oggi (calcolati dalla data di inizio): {auto_years:.2f}."
             )
             inps_fill_missing_years = st.checkbox(
                 "Versa i contributi mancanti fino a 20 anni anche dopo FIRE",
@@ -257,7 +273,7 @@ def render() -> dict:
             inps_contrib_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
             years_to_inps = max(pension_access_age - age_now, 0)
             months_to_inps = max(int(round(years_to_inps * 12)), 0)
-            for m in range(months_to_inps + 1):
+            for m in range(months_to_inps):
                 age_t = age_now + m / 12
                 should_contribute = age_t < planned_retirement_age
                 if (
@@ -423,6 +439,8 @@ def render() -> dict:
                 "inps_annual_contribution":      inps_annual_contribution,
                 "inps_contribution_growth_rate": inps_contribution_growth_rate,
                 "inps_montante_revaluation_rate":inps_montante_revaluation_rate,
+                "inps_contribution_start_date":  inps_contribution_start_date.strftime("%Y-%m-%d"),
+                "use_auto_inps_years":          1,
                 "inps_years_contributed_current":inps_years_contributed_current,
                 "inps_fill_missing_years":      int(inps_fill_missing_years),
                 "inps_gross_factor":             inps_gross_factor,

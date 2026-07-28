@@ -100,13 +100,13 @@ def _run_one_mc(
 ) -> bool:
     """Esegue una singola simulazione Monte Carlo."""
     fonte_post_fire_real_monthly = (1 / (1 + inflation_monthly)) - 1
-    fonte_tax_rate = fonte_tax_rate_by_enrollment(
-        fonte_enrollment_date, float(fonte_access_age), start_age
-    )
     effective_fonte_access_age = (
         float(planned_retirement_age) + max(float(fonte_unlock_years_after_fire), 0.0)
         if fonte_unlock_years_after_fire is not None
         else float(fonte_access_age)
+    )
+    fonte_tax_rate = fonte_tax_rate_by_enrollment(
+        fonte_enrollment_date, float(planned_retirement_age), start_age
     )
 
     fonte = FonteState(pot=pension_value, contributions_paid=fonte_contributions_paid)

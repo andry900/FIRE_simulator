@@ -101,13 +101,13 @@ def simulate(
     real_estate_real_annual = (1 + real_estate_appreciation) / (1 + inflation) - 1
     real_estate_growth_monthly = (1 + real_estate_real_annual) ** (1 / 12) - 1
     inps_contrib_growth_monthly = (1 + inps_contribution_growth_rate) ** (1 / 12) - 1
-    fonte_tax_rate = fonte_tax_rate_by_enrollment(
-        fonte_enrollment_date, float(fonte_access_age), start_age
-    )
     effective_fonte_access_age = (
         float(planned_retirement_age) + max(float(fonte_unlock_years_after_fire), 0.0)
         if fonte_unlock_years_after_fire is not None
         else float(fonte_access_age)
+    )
+    fonte_tax_rate = fonte_tax_rate_by_enrollment(
+        fonte_enrollment_date, float(planned_retirement_age), start_age
     )
 
     months = int((end_age - start_age) * 12)
