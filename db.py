@@ -220,6 +220,10 @@ def _ensure_schema_updates(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE simulation_params SET minimum_portfolio_reserve = 100000 WHERE minimum_portfolio_reserve IS NULL"
     )
+    # Enforce minimum buffer of 10k (no one should arrive at 0)
+    conn.execute(
+        "UPDATE simulation_params SET minimum_portfolio_reserve = 10000 WHERE minimum_portfolio_reserve < 10000"
+    )
 
 
 def _drop_legacy_fonte_return_columns(conn: sqlite3.Connection) -> None:

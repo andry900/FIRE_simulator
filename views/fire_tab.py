@@ -143,7 +143,7 @@ def render(df: pd.DataFrame, cfg: dict) -> None:
     st.divider()
 
     threshold_swr = DETERMINISTIC_SWR
-    minimum_portfolio_reserve = float(cfg.get("minimum_portfolio_reserve") or 100000.0)
+    minimum_portfolio_reserve = float(cfg.get("minimum_portfolio_reserve", 100000.0))
 
     # ── Costruzione kwargs comuni ────────────────────────────────────────────
     base_sim_kwargs = dict(

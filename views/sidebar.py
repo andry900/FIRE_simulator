@@ -107,11 +107,11 @@ def render() -> dict:
             )
             minimum_portfolio_reserve = st.number_input(
                 "Patrimonio minimo da mantenere (€ di oggi)",
-                value=float(p.get("minimum_portfolio_reserve") or 100000.0),
+                value=float(max(p.get("minimum_portfolio_reserve", 100000.0), 10000.0)),
                 step=5000.0,
-                min_value=0.0,
+                min_value=10000.0,
                 format="%.0f",
-                help="Nel modello i valori sono in euro reali, quindi questo importo è già adattato all'inflazione.",
+                help="Buffer di liquidità minimo garantito fino a 95 anni (in euro reali di oggi). Minimo 10.000€.",
             )
             st.caption(
                 f"Soglia di sicurezza: €{minimum_portfolio_reserve:,.0f} in euro di oggi."

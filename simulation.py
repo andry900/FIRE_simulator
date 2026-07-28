@@ -242,45 +242,50 @@ def simulate(
             # Accumulo end-of-month: stipendio non rende quel mese (ok).
             portfolio = portfolio * (1 + real_monthly) + cashflow_t
 
-        reserve_floor = max(0.0, float(minimum_portfolio_reserve or 100000.0))
-        if retired and portfolio <= reserve_floor:
-            portfolio = max(portfolio, 0.0)
-            success = False
-
     return (
         pd.DataFrame({"age": ages, "portfolio": values, "fire_number": fire_nums}),
         success,
     )
 
 
-def find_fire_age(precision: float = 0.1, **simulate_kwargs) -> float | None:
-    """Trova l'età FIRE minima sostenibile tramite binary search."""
+def find_fire_age(precision: float = 0.01, **simulate_kwargs) -> float | None:
+    """Trova l'età FIRE minima sostenibile tramite binary search.
+    
+    Criterio: il portfolio a fine vita (end_age, es. 95 anni) deve essere >= minimum_portfolio_reserve.
+    """
     start_age = float(simulate_kwargs["start_age"])
     end_age = int(simulate_kwargs["end_age"])
+    reserve_floor = max(0.0, float(simulate_kwargs.get("minimum_portfolio_reserve", 100000.0)))
 
-    def is_display_sustainable(planned_age: float) -> bool:
+    def is_sustainable(planned_age: float) -> bool:
         local_kwargs = {**simulate_kwargs, "planned_retirement_age": planned_age}
         df_path, ok = simulate(**local_kwargs)
-        reserve_floor = max(0.0, float(simulate_kwargs.get("minimum_portfolio_reserve") or 100000.0))
-        return ok and not ((df_path["portfolio"] <= reserve_floor) & (df_path["age"] >= planned_age)).any()
+        # Criterio: portfolio a end_age deve essere >= reserve_floor
+        portfolio_final = float(df_path.iloc[-1]["portfolio"])
+        return portfolio_final >= reserve_floor
 
-    if is_display_sustainable(start_age):
+    if is_sustainable(start_age):
         return start_age
 
-    if not is_display_sustainable(float(end_age)):
+    if not is_sustainable(float(end_age)):
         return None
 
     lo, hi = start_age, float(end_age)
     while hi - lo > precision:
         mid = (lo + hi) / 2
-        if is_display_sustainable(mid):
+        if is_sustainable(mid):
             hi = mid
         else:
             lo = mid
 
+    # Arrotonda a risoluzione precision e verifica sostenibilità
     candidate = round(hi, 1)
     step = precision if precision > 0 else 0.1
-    while candidate <= float(end_age) and not is_display_sustainable(candidate):
+    
+    # Se il candidato non è sostenibile, incrementa fino a trovare uno sostenibile
+    safety_counter = 0
+    while not is_sustainable(candidate) and candidate <= float(end_age) and safety_counter < 100:
         candidate = round(candidate + step, 10)
-
-    return candidate
+        safety_counter += 1
+    
+    return candidate if is_sustainable(candidate) else None
